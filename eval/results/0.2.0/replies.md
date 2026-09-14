@@ -1,4 +1,4 @@
-# Replies: baseline
+# Replies: 0.2.0
 
 ## explain-index
 
@@ -193,110 +193,94 @@ In short, an index trades write speed, storage, and memory for read speed. It hu
 ### explain-index on 1
 
 ````markdown
-A database index is a separate data structure, usually a B-tree, that stores sorted values from one or more columns with pointers to their rows. The database can then find matching rows without scanning the whole table.
+A database index is a separate, sorted data structure (usually a B-tree) that maps column values to row locations. The database can find matching rows without scanning the whole table, at the cost of extra storage and extra work on every write.
 
-## What an index speeds up
-- `WHERE` lookups on the indexed columns
-- `JOIN` conditions on the indexed columns
-- `ORDER BY` and `GROUP BY`, when the index order matches
-- Queries answered entirely from the index (covering index), with no table read
+## What it buys you
 
-## Cost of every index
-- Every `INSERT` and `DELETE` must update each index on the table.
-- Every `UPDATE` that touches an indexed column must update that index.
-- It uses disk space and memory in the buffer cache.
-- The query planner has more plans to evaluate.
+- Fast lookups on `WHERE`, `JOIN`, and `ORDER BY` columns: O(log n) seeks instead of full scans.
+- Sorted output without a sort step, if the index order matches the `ORDER BY`.
+- Index-only scans when the index holds every column the query needs (a covering index), so the table is never read.
 
-## When an index makes performance worse
+## When an index makes things worse
 
-| Code | Case | Why it hurts |
-|---|---|---|
-| F1 | Write-heavy tables (logs, events, queues) | Each write pays the index cost, but few reads benefit. |
-| F2 | Low-selectivity columns (booleans, status with 3 values) | The index matches a large share of rows. Random row lookups then cost more than a sequential scan. |
-| F3 | Small tables | A full scan fits in a few pages and is already fast. The index adds a lookup step. |
-| F4 | Redundant indexes | An index on `(a)` is covered by an existing one on `(a, b)`. This doubles write cost for no read gain. |
-| F5 | Frequently updated indexed columns | Each change moves the entry within the index, causing churn, bloat, and page splits. |
-| F6 | Too many indexes on one table | Write latency grows with each index, and indexes compete for cache memory, which pushes hot data out. |
-| F7 | Random keys such as UUIDv4 on a clustered or B-tree index | Inserts land at random positions, which causes page splits, fragmentation, and poor cache locality. |
-| F8 | Planner picks the index incorrectly | Stale statistics can make the planner choose an index scan that is slower than a table scan. |
-| F9 | Bulk loads | Maintaining indexes row by row is much slower than dropping them and rebuilding after the load. |
+| Case | Why it hurts |
+|---|---|
+| Write-heavy tables | Every `INSERT`, `UPDATE` of an indexed column, and `DELETE` also updates each index. Ten indexes means roughly ten extra writes per row, plus more WAL/redo and replication volume. |
+| Low-selectivity columns (`status`, `is_active`, booleans) | If a value matches a large share of rows, reading the index and then fetching each row randomly is slower than one sequential scan. The planner usually ignores the index, so you pay write cost for nothing. |
+| Small tables | A full scan fits in a few pages. The index adds a lookup and gains nothing. |
+| Queries that can't use it | `WHERE LOWER(email) = ...` on an index of `email`, `LIKE '%foo'`, implicit type casts, or filtering on the second column of a composite index without the first. The index is maintained but never read. |
+| Redundant or overlapping indexes | An index on `(a)` next to one on `(a, b)` duplicates the write and memory cost. The composite already serves `WHERE a = ...`. |
+| Memory pressure | Indexes compete with table data for the buffer pool. Too many push hot data out of RAM and turn cached reads into disk reads. |
+| Bulk loads | Maintaining indexes row by row during a large import is much slower than dropping them, loading, and rebuilding. |
+| Random-key clustered indexes (MySQL InnoDB with UUIDv4 primary keys) | Inserts land at random positions, causing page splits, fragmentation, and poor cache locality. Use sequential keys such as UUIDv7 or bigint. |
+| Stale statistics or misestimates | The planner can pick an index scan that looks cheap but returns far more rows than estimated, which is slower than the scan it replaced. |
 
-## When an index exists but goes unused
-- Functions on the column, such as `WHERE LOWER(email) = ...`, unless you create an expression index
-- Leading wildcards, such as `LIKE '%foo'`
-- Composite indexes queried without their leading column
-- Implicit type casts in the comparison
+## How to decide
 
-In these cases you pay the write cost and get no read benefit.
-
-## Rule of thumb
-Add an index for a specific slow query you have measured. Confirm the plan with `EXPLAIN ANALYZE`. Periodically remove unused indexes, for example those with `idx_scan = 0` in PostgreSQL's `pg_stat_user_indexes`.
+- Index for the queries you actually run, not for every column. Check with `EXPLAIN ANALYZE` (Postgres) or `EXPLAIN` / `EXPLAIN ANALYZE` (MySQL) before and after.
+- In composite indexes, put equality columns first, then range or sort columns.
+- Find unused indexes and remove them: `pg_stat_user_indexes` where `idx_scan = 0` in Postgres, or `sys.schema_unused_indexes` in MySQL. Check across a full business cycle first, since month-end or reporting queries may be the only users.
+- Creating an index locks writes by default. On a live Postgres table use `CREATE INDEX CONCURRENTLY`, and in MySQL confirm the DDL runs as online (`ALGORITHM=INPLACE, LOCK=NONE`).
 ````
 
 ### explain-index on 2
 
 ````markdown
-A database index is a separate, sorted data structure (usually a B-tree) that maps column values to row locations. The database uses it to find matching rows without scanning the whole table.
+A database index is a separate, sorted structure (usually a B-tree) that maps column values to row locations, so the database can find matching rows without scanning the whole table. Every index speeds up some reads and slows down every write to that table.
 
-## How it works
-- **Without an index:** `WHERE email = 'x'` reads every row, which is O(n).
-- **With an index on `email`:** the database walks the B-tree to the matching entries, which is O(log n), then fetches only those rows.
-- **Cost:** every index is another copy of the indexed columns. It uses disk and memory, and it must be updated whenever the table changes.
-- **Composite indexes** like `(a, b)` help queries that filter on `a` or on `a` and `b`. Filtering on `b` alone gets little or no benefit.
+## What it costs
 
-## When an index makes performance worse
+- **Writes:** each INSERT, DELETE, and UPDATE of an indexed column must also update every affected index. Ten indexes on a table means roughly ten extra writes per row change.
+- **Storage and memory:** indexes compete with table data for the buffer pool or page cache. Once hot indexes no longer fit in RAM, both reads and writes slow down.
+- **Planner risk:** more indexes give the query planner more ways to choose a bad plan.
 
-| Code | Situation | Why it hurts |
+## When adding one makes things worse
+
+| Case | Why it hurts | What to do |
 |---|---|---|
-| W1 | Write-heavy tables | Every INSERT, DELETE and UPDATE of an indexed column must also update each index. With many indexes, writes slow down and lock contention and log volume go up. |
-| W2 | Low-selectivity columns (`is_active`, `status`) | If a value matches a large share of the table, looking up each row through the index means random reads. That is slower than one sequential scan. |
-| W3 | Wrong plan from the query planner | With stale statistics or skewed data, the planner can pick a worse index. A common case is `ORDER BY created_at LIMIT 10` walking the index and throwing away millions of rows that fail the filter. |
-| W4 | Redundant indexes | An index on `(a)` next to one on `(a, b)` adds write cost and memory use but no read gain. |
-| W5 | Memory pressure | Indexes compete with table data for the buffer pool. Once they no longer fit in RAM, cache misses rise for all queries. |
-| W6 | Random keys (UUIDv4) as the primary key in MySQL/InnoDB or SQL Server clustered tables | Inserts land on random pages, which causes page splits, fragmentation and poor cache locality. |
-| W7 | Index on a column that is updated often (PostgreSQL) | PostgreSQL can no longer do its cheap in-page (HOT) updates on that table, so table and index bloat grow. |
-| W8 | Building an index on a large live table | A plain `CREATE INDEX` blocks writes until it finishes. Use `CREATE INDEX CONCURRENTLY` in PostgreSQL or `ONLINE = ON` in SQL Server. |
+| Write-heavy table with rare reads on that column | Every write pays the maintenance cost, and almost no query benefits | Skip the index, or index only what hot queries need |
+| Low-selectivity column (boolean, status with 3 values) | If a value matches a large share of rows, index lookup plus random row fetches is slower than a sequential scan. It still costs every write | Use a partial index on the rare value, e.g. `WHERE status = 'pending'` |
+| Query returns a large fraction of the table | Same random-I/O problem as above | Let it scan, or use a covering index so the table is never touched |
+| Small table | A full scan of a few pages beats an index lookup | No index beyond the primary key |
+| Redundant indexes, e.g. `(a)` next to `(a, b)` | `(a, b)` already serves queries on `a`, so `(a)` is pure write and memory cost | Drop the narrower one |
+| Random keys (UUIDv4) as a clustered primary key (InnoDB, SQL Server) | Inserts land on random pages, causing page splits, fragmentation, and a larger working set | Use UUIDv7 or a sequential key |
+| Planner picks the new index badly | Common case: `ORDER BY created_at LIMIT 10` with a filter on another column. The planner walks the `created_at` index expecting early matches and reads millions of rows | Add a composite index matching filter then sort, e.g. `(user_id, created_at)` |
+| Index the query cannot use | `WHERE lower(email) = ...` against an index on `email`, or `LIKE '%foo'`. All cost, no benefit | Index the expression, or change the query |
+| Bulk loads | Maintaining indexes row by row is much slower than building once | Drop indexes, load, recreate |
+| Building on a large live table | A plain `CREATE INDEX` blocks writes for the whole build | `CREATE INDEX CONCURRENTLY` (Postgres) or `ONLINE = ON` (SQL Server) |
 
-## Deciding whether to add one
-- Add an index only for queries that run often and match a small share of rows.
-- Compare the plan with `EXPLAIN ANALYZE` before and after on data the size of production. Small test tables hide W2 and W3.
-- Remove indexes that never get used. In PostgreSQL, look for `idx_scan = 0` in `pg_stat_user_indexes`. Stats reset on restart, so check over a period that covers all your workloads first.
+## How to decide
+
+- Confirm the target query actually uses the index and gets faster with `EXPLAIN ANALYZE`, run on production-sized data. Plans on small dev data are often different.
+- Find indexes that cost writes but serve no reads. In Postgres, `idx_scan = 0` in `pg_stat_user_indexes` over a representative period. In SQL Server, `sys.dm_db_index_usage_stats`.
 ````
 
 ### explain-index on 3
 
 ````markdown
-A database index is a separate sorted data structure, usually a B-tree, that maps column values to row locations so the database can find matching rows without scanning the whole table.
-
-## What it does
-- Turns lookups, range filters, `ORDER BY`, and joins on the indexed columns from a full table scan (O(n)) into a tree search (O(log n)).
-- Stores a copy of the indexed column values plus a pointer to each row, so it uses its own disk space and memory.
-- Is maintained by the database on every write to the table.
+An index is a separate sorted structure, usually a B-tree, that maps column values to row locations. It lets the database find matching rows without scanning the whole table. You get faster reads on those columns, and you pay for it with extra work on every write, extra storage and extra memory.
 
 ## When an index makes performance worse
 
-| Code | Case | Why it hurts |
-|------|------|--------------|
-| W1 | Write-heavy tables | Every `INSERT`, `UPDATE` of an indexed column, and `DELETE` must also update each index. Ten indexes means roughly ten extra writes per row change. |
-| W2 | Low-selectivity columns | On a column like `status` with 3 values, a query matching 30% of rows is faster as a sequential scan. Following the index costs a random I/O per row. If the planner picks the index anyway, often due to stale statistics, queries slow down. |
-| W3 | Redundant or overlapping indexes | An index on `(a)` is usually covered by an existing index on `(a, b)`. The extra one adds write cost and memory pressure with no read benefit. |
-| W4 | Memory pressure | Indexes compete with table data for the buffer cache. Too many indexes push hot data out of RAM and increase disk reads for everything. |
-| W5 | Small tables | A table that fits in a few pages is scanned faster than the index is traversed. |
-| W6 | Wide or random keys | Large keys (long strings) make the tree deeper and bigger. Random keys like UUIDv4 as a clustered primary key cause page splits and fragmentation on insert. |
-| W7 | Bulk loads | Maintaining indexes row by row during a large import is much slower than dropping them, loading, then rebuilding. |
-| W8 | Index builds on live tables | Creating an index can lock the table or consume heavy I/O. In PostgreSQL use `CREATE INDEX CONCURRENTLY`. In MySQL check that the `ALTER` is online for your engine and version. |
+| Case | Why it hurts | What to do instead |
+|---|---|---|
+| Write-heavy table with many indexes | Every INSERT and DELETE, and every UPDATE that touches an indexed column, has to update each index. This raises write latency, lock time and WAL/redo volume. | Keep only the indexes that real queries use. |
+| Low-selectivity column (`status`, booleans) | If a query matches a large share of rows (roughly over 5 to 20%), random lookups through the index cost more than a sequential scan. The planner usually skips the index, so you pay the write cost for nothing. | Use a partial index on the rare value, e.g. `WHERE status = 'failed'`, or a composite index led by a selective column. |
+| Redundant index, e.g. `(a)` when `(a, b)` exists | The leading column of `(a, b)` already serves `WHERE a = ?`, so the extra index only adds write cost. | Drop it. |
+| Random keys (UUIDv4) as a clustered primary key in InnoDB or SQL Server | Inserts land on random pages. That causes page splits, fragmentation and cache misses. | Use UUIDv7 or a bigint identity. |
+| Total index size larger than available memory | Indexes compete with table data for the buffer pool, so hot reads start going to disk. | Remove unused indexes, or use covering and partial indexes to keep them small. |
+| Planner picks the new index over a better plan | Stale statistics or skewed data can make a new index look cheaper than it is. Queries that were fine before get slower. | Run `EXPLAIN ANALYZE` on your key queries before and after adding the index. |
+| Frequently updated column in Postgres | An index on that column blocks HOT updates. Every update then writes new index entries, which adds bloat and vacuum load. | Leave that column out of the index unless queries need it. |
+| Bulk load into an indexed table | Maintaining the index row by row is much slower than building it once. | Drop or disable the index, load the data, then rebuild. |
+| Creating an index on a large live table | A plain `CREATE INDEX` blocks writes until the build finishes. | Use `CREATE INDEX CONCURRENTLY` in Postgres or `ALGORITHM=INPLACE, LOCK=NONE` / `ONLINE = ON` in MySQL and SQL Server. |
 
-## When an index is ignored, so it only costs
-- Functions or casts on the column: `WHERE LOWER(email) = ...` skips an index on `email` unless it is an expression index.
-- Leading wildcards: `LIKE '%foo'` cannot use a B-tree.
-- Wrong column order: an index on `(a, b)` does not help `WHERE b = ?`.
-- Type mismatches between the column and the parameter.
+## Finding indexes that cost more than they return
 
-## How to decide
-1. Find the slow query and run `EXPLAIN ANALYZE` (PostgreSQL) or `EXPLAIN` (MySQL).
-2. Add the index and compare the plan and timing on production-sized data.
-3. Check write latency on the table afterward.
-4. Remove unused indexes periodically. In PostgreSQL, `pg_stat_user_indexes` with `idx_scan = 0` shows candidates.
+- **Postgres:** look for rows in `pg_stat_user_indexes` with `idx_scan = 0` that have existed for a full business cycle. Check replicas too, because the counts are tracked per server.
+- **SQL Server:** in `sys.dm_db_index_usage_stats`, look for indexes where `user_updates` is high and `user_seeks + user_scans` is near zero.
+- **MySQL:** query `sys.schema_unused_indexes`.
+
+The claude.ai Canva, Gmail, Google Calendar and Google Drive connectors need authorization in your claude.ai connector settings before they can be used. This doesn't affect this answer.
 ````
 
 ## explain-thread
@@ -466,126 +450,93 @@ Many real systems mix these. For example, a web server might run several worker 
 ### explain-thread on 1
 
 ````markdown
-A process has its own memory space. A thread runs inside a process and shares that process's memory with the other threads in it.
+A process has its own memory space. Threads run inside one process and share its memory. Use threads when tasks need to share state cheaply. Use processes when you need isolation or true CPU parallelism in a runtime that blocks it.
 
-## Differences
-
-| Aspect | Process | Thread |
+| | Thread | Process |
 |---|---|---|
-| Memory | Separate address space | Shares heap and globals, has its own stack |
-| Communication | IPC: pipes, sockets, shared memory, message queues | Direct access to shared variables |
-| Crash impact | A crash stays inside that process | A crash kills the whole process |
-| Creation cost | Higher. On Windows, `CreateProcess` is especially slow | Lower |
-| Context switch | Slower, because the address space changes | Faster |
-| Sync bugs | Rare, because nothing is shared by default | Data races and deadlocks are common. You need locks or atomics |
-| Security boundary | Yes, the OS enforces isolation | No |
+| Memory | Shared with other threads in the process | Separate by default |
+| Start and context-switch cost | Low | Higher, and much higher on Windows (see below) |
+| Communication | Direct access to shared data, guarded by locks | IPC (pipes, sockets, shared memory, queues) with serialization cost |
+| One crashes | Takes down the whole process | The others keep running |
+| Security boundary | None | OS-enforced, can run with different privileges |
+| Main bug risk | Data races, deadlocks | Slow or complex IPC, higher memory use |
 
-## Pick processes when
+**Pick threads when**
+- Tasks share a lot of in-memory state and pass it back and forth often. Copying it between processes would cost more than the locking.
+- The work is I/O-bound (network, disk) and you have tens to hundreds of concurrent tasks. At thousands of concurrent waits, async I/O usually beats both.
+- You need to hand work off quickly, like a UI thread passing a job to a background worker.
 
-- **Isolation matters:** you run untrusted code or plugins, or one component failing must not take down the others. Browsers use one process per tab for this reason.
-- **Your runtime has a global lock:** CPU-bound Python work under the GIL needs `multiprocessing`. Python 3.13+ free-threaded builds relax this, but many libraries don't support them yet.
-- **You need to scale past one machine later:** code that already talks through IPC moves to network messaging easily.
-- **Components need different privileges or lifecycles:** for example, a sandboxed renderer or a worker you can restart on its own.
+**Pick processes when**
+- The work is CPU-bound and the runtime serializes threads. The main case is CPython's GIL, unless you run the free-threaded build and your C extensions support it.
+- A crash or memory leak must not take down everything else. Examples are browser tabs, plugin hosts, and worker pools you recycle every N jobs.
+- You run untrusted code or need different privileges per component.
+- The work may later spread across machines. Code that already talks over IPC moves to the network more easily.
 
-## Pick threads when
+**Pitfalls that affect the choice**
+- Windows has no `fork`, so new processes start from scratch and re-import everything. Create a pool once and reuse it instead of spawning a process per task.
+- On POSIX, calling `fork` in a process that already has threads copies only the calling thread. Locks held by other threads stay locked in the child forever. Use spawn, or fork before starting threads.
+- In Go, Java, C#, Rust and C++, threads already run on multiple cores. There, choose processes only for isolation, not for speed.
 
-- **Tasks share a lot of state:** copying that state between processes would cost more than locking it.
-- **CPU-bound work runs in a runtime without a global lock:** C, C++, Rust, Go, Java, and .NET use all cores with threads.
-- **Low latency matters:** threads avoid IPC serialization and slow startup.
-- **You need many workers:** hundreds of threads are fine. Hundreds of processes waste memory.
-
-## Consider neither for I/O-bound work
-
-- For many concurrent network or disk waits, async I/O (`async/await`, epoll, IOCP) handles thousands of connections on a few threads with less memory than one thread per connection.
-
-## Risks
-
-- **R1:** Shared memory between threads leads to races that tests often miss. Use tools like ThreadSanitizer, or pass messages over channels.
-- **R2:** Processes cost more per request if you spawn them often. Use a pool instead of creating one per task.
-- **R3:** `fork` in a multithreaded program copies only the calling thread, and locks held by the others can stay locked forever. Spawn fresh processes instead.
+Default to threads or async in one process. Switch to processes when you hit one of the process cases above.
 ````
 
 ### explain-thread on 2
 
 ````markdown
-A process has its own memory space. A thread runs inside a process and shares that process's memory with the other threads in it.
+A process has its own memory space. A thread runs inside a process and shares that process's memory with the other threads in it. Use threads when tasks need to share a lot of state cheaply. Use processes when you need isolation or true CPU parallelism in a runtime that blocks it.
 
-## Differences
-
-| Aspect | Process | Thread |
+| | Process | Thread |
 |---|---|---|
-| Memory | Separate address space | Shared heap and globals, own stack |
-| Isolation | A crash or memory bug stays in that process | A crash or memory bug can take down the whole process |
-| Creation and switching cost | Higher | Lower |
-| Communication | IPC (pipes, sockets, shared memory, message queues) | Direct access to shared data |
-| Data safety | No shared state by default | Needs locks, atomics or channels to avoid races |
-| Security boundary | Yes, can drop privileges or sandbox | No |
-| Scaling | Can spread across machines | Limited to one machine |
+| Memory | Separate. Sharing needs IPC, pipes, sockets or shared memory | Shared. Any thread can read or write any object |
+| Crash impact | A crash stays inside that process | A crash, segfault or unhandled panic kills every thread in the process |
+| Startup and switching cost | Higher, most noticeable on Windows where there is no `fork` | Lower |
+| Main bug risk | Serialization overhead, IPC failures | Data races, deadlocks, heisenbugs |
+| Security boundary | Yes, the OS enforces it | No |
 
-## Pick processes when
+**Pick processes when:**
+- One task failing must not take down the others, such as browser tabs, worker pools running untrusted or unstable code, or plugin hosts.
+- You need privilege separation or sandboxing.
+- You run CPU-bound work in CPython (before free-threaded 3.13+ builds), or in Node or Ruby MRI. Their interpreter locks or single-threaded event loops stop threads from running in parallel.
+- You want to scale across machines later. A process design that talks over IPC moves to network calls more easily.
 
-- **Isolation matters:** untrusted code, plugins, browser tabs, or workers that may crash or leak memory.
-- **Security matters:** you need separate privileges or sandboxing per unit.
-- **The runtime blocks parallel threads:** CPython with the GIL (before free-threaded 3.13+ builds) runs CPU-bound Python code on one core at a time, so use `multiprocessing`.
-- **Work is independent:** little shared state, so IPC cost stays low.
-- **You may scale out later:** a process design moves to multiple machines more easily.
+**Pick threads when:**
+- Tasks share large in-memory data, and copying or serializing it across processes would cost more than the work itself.
+- You need low-latency handoffs between tasks, such as a render thread and a game logic thread.
+- You are in a runtime with real parallel threads, such as Java, Go, C#, Rust or C++, and the work is CPU-bound.
 
-## Pick threads when
+**Pick neither for I/O-bound concurrency at scale.** Thousands of network connections are better served by async/await, an event loop or goroutines. OS threads cost memory per stack (often around 1 MB reserved), and thousands of them waste memory and time on context switches.
 
-- **Tasks share a lot of data:** copying it over IPC would be too slow.
-- **You need many parallel units cheaply:** thread pools in Java, C#, Go, Rust or C++.
-- **Latency between tasks matters:** no serialization or context-switch overhead from IPC.
-- **CPU-bound work runs in a runtime with real thread parallelism:** JVM, .NET, native code.
-
-## Pick neither when
-
-- **The work is mostly I/O waiting** (network servers, API calls). Async I/O (`async`/`await`, event loops) or green threads handle thousands of connections with less overhead than one thread or process per connection.
-
-## Risks
-- **R1:** Threads give you data races, deadlocks and bugs that are hard to reproduce. Plan the sync strategy up front.
-- **R2:** Processes cost more memory and startup time. On Windows there is no `fork`, so spawning a process is slower than on Linux.
-- **R3:** A common default is processes for isolation plus threads or async inside each one. Web servers like Gunicorn and Nginx work this way.
+**Common hybrid:** run one process per CPU core for isolation and to get around interpreter locks, with a thread pool or async loop inside each. Gunicorn workers, Chrome and PostgreSQL work this way. PostgreSQL uses processes only, as a deliberate choice for robustness.
 ````
 
 ### explain-thread on 3
 
 ````markdown
-A process has its own memory space. A thread runs inside a process and shares that process's memory with the other threads in it.
+A process has its own memory space and a thread shares memory with the other threads in its process. Use threads when tasks need fast access to shared state. Use processes when you need isolation.
 
-## Differences
-
-| Aspect | Process | Thread |
+| | Process | Thread |
 |---|---|---|
-| Memory | Separate address space | Shared with other threads in the process |
-| Crash impact | Only that process dies | One bad thread can take down the whole process |
-| Creation and switch cost | Higher (new address space, handles, page tables) | Lower |
-| Communication | IPC: pipes, sockets, shared memory, message queues | Direct access to the same variables |
-| Data safety | Isolated by default | Needs locks or other synchronization to avoid races |
-| Scaling | Can spread across machines | One machine only |
+| Memory | Separate. Data moves through IPC (pipes, sockets, shared memory) and is usually serialized | Shared heap, one stack per thread |
+| Failure | A crash stays inside that process | A segfault or unhandled fault kills every thread in the process |
+| Cost | Slower to start and uses more memory. Process creation on Windows is especially slow | Cheap to create and switch |
+| Typical bugs | Serialization overhead, IPC plumbing | Data races, deadlocks |
+| Security boundary | Enforced by the OS. Can run with different privileges | None |
 
-## Pick processes when
+**Pick threads when:**
+- Workers read or change large in-memory state and copying it would cost more than locking it.
+- Handoffs between tasks must be low latency.
+- You are in Go, Java, C#, or Rust, where a thread pool is the normal default for CPU work.
 
-- **Isolation matters.** Untrusted code, plugins, or components that crash often. Browsers run each tab this way.
-- **Security boundaries are needed.** Different privileges or sandboxing per worker.
-- **Your runtime blocks parallel threads.** CPython's GIL stops threads from running Python code in parallel on CPU-bound work, so use `multiprocessing` there. Free-threaded Python 3.13+ changes this, but many C extensions don't support it yet.
-- **You may later scale across hosts.** Message passing between processes moves to a network more easily than shared memory does.
+**Pick processes when:**
+- You run untrusted code, plugins, or unstable native libraries. This is why browsers use one process per tab.
+- You do CPU-bound work in CPython. The GIL stops threads from running Python code in parallel. The free-threaded build (3.13+) removes this limit, but only if your C extensions support it.
+- Workers need to restart on their own, for example to clear memory leaks (gunicorn `max_requests`) or to be deployed separately.
+- You may spread the work across machines later. Code that already passes messages between processes is easier to move.
 
-## Pick threads when
-
-- **Workers share a lot of state.** Copying or serializing that state between processes would cost too much.
-- **Tasks are many, small and short-lived.** Process startup cost would dominate, especially on Windows, which has no `fork`.
-- **You need low-latency coordination.** Examples are a UI thread plus background workers, or a game loop plus asset loading.
-- **Work is I/O-bound.** Threads spend most of their time waiting, so the GIL and switch overhead don't matter much. For very high concurrency, async I/O on one thread often beats both.
-
-## Risks with threads
-
-- R1: Race conditions and deadlocks. These bugs don't show up reliably and are hard to reproduce.
-- R2: Memory corruption in one thread breaks every thread, because they all share the same memory.
-- R3: Adding more threads than you have cores doesn't speed up CPU-bound work. Extra switching can make it slower.
-
-## Default
-
-Use threads, or a thread pool, for I/O-bound or tightly coupled work inside one trusted program. Use processes when you need fault isolation, a security boundary, or true CPU parallelism in a runtime with a GIL.
+**Traps that change the choice:**
+- If the work mostly waits on I/O, async (an event loop) usually beats both. It handles thousands of connections with far less memory than one thread per connection.
+- Calling `fork()` in a multithreaded program copies only the calling thread. If another thread held a lock at that moment, the lock stays held forever in the child. Use spawn instead.
+- Windows has no `fork()`, so Python `multiprocessing` always uses spawn there. Each worker re-imports your modules, which makes startup slow. Also, code that is not under `if __name__ == "__main__":` runs again in every worker.
 ````
 
 ## debug-foreach
@@ -737,15 +688,12 @@ If one failure shouldn't stop the others, use `Promise.allSettled` and check the
 ### debug-foreach on 1
 
 ````markdown
-`forEach` ignores the promise each async callback returns, so it kicks off every write and returns right away. `console.log("saved")` runs while the writes are still in progress.
+`forEach` doesn't wait for the promises your async callback returns. It starts every write and returns right away, so `console.log` runs before any write finishes.
 
-- `await` inside the callback only pauses that callback, not `saveAll`.
-- `saveAll`'s own promise also resolves before the files are written, so `await saveAll(items)` doesn't wait for the writes.
-- If a write fails, the error becomes an unhandled rejection that `saveAll` never sees.
+- `saveAll`'s own promise also resolves early, so a caller that does `await saveAll(items)` still moves on before the files exist.
+- A failed write becomes an unhandled promise rejection instead of making `saveAll` reject, so the caller never sees the error.
 
-## Fix
-
-Run the writes in parallel and wait for all of them:
+Fix for parallel writes:
 
 ```js
 async function saveAll(items) {
@@ -758,29 +706,24 @@ async function saveAll(items) {
 }
 ```
 
-If you need to write one file at a time, for example to limit open file handles, use a loop:
+Use a `for...of` loop with `await` inside if you want one write at a time. That's slower, but it avoids hitting the open-file limit (`EMFILE`) when `items` is very large:
 
 ```js
 for (const item of items) {
   await fs.promises.writeFile(`out/${item.id}.json`, JSON.stringify(item));
 }
 ```
-
-With `Promise.all`, the first failed write rejects `saveAll`, but the other writes keep going. Use `Promise.allSettled` if you need the result of every write.
 ````
 
 ### debug-foreach on 2
 
 ````markdown
-`forEach` doesn't wait for async callbacks. It starts every write and returns right away, so `console.log("saved")` runs before any write finishes.
+`forEach` ignores the promises your async callback returns, so `saveAll` never waits for the writes. The loop starts all the writes, `console.log("saved")` runs right away, and the writes finish later.
 
-- `forEach` ignores what the callback returns. Each `async` callback returns a promise, and nothing waits for it.
-- Because nothing waits for those promises, `saveAll` also finishes before the files are written. Any `await saveAll(...)` in your code has the same bug.
-- If a write fails, the error becomes an unhandled promise rejection. The caller never sees it.
+- The `await` inside the callback only pauses that one callback. It does not pause `saveAll`.
+- Write errors are also lost. They become unhandled rejections instead of rejecting `saveAll`, so a caller's `try/catch` never sees them.
 
-## Fix
-
-To write all files at the same time:
+To run the writes in parallel:
 
 ```js
 async function saveAll(items) {
@@ -793,7 +736,7 @@ async function saveAll(items) {
 }
 ```
 
-To write one file at a time:
+To write one file at a time, which keeps the number of open file handles low for large arrays:
 
 ```js
 async function saveAll(items) {
@@ -804,25 +747,18 @@ async function saveAll(items) {
 }
 ```
 
-## Choosing
-- **`Promise.all`:** faster. With thousands of items it can hit the limit on open files (`EMFILE`). It rejects on the first failure, but the other writes keep running.
-- **`for...of`:** slower, but only one file is open at a time. It stops at the first failure.
+`Promise.all` rejects on the first failure, but the other writes keep running. Use `Promise.allSettled` if you need to know the result of every write.
 ````
 
 ### debug-foreach on 3
 
 ````markdown
-`forEach` ignores the promises your async callback returns, so `saveAll` never waits for the writes.
+`forEach` ignores the promises your async callback returns, so it starts every write and returns immediately without waiting for any of them.
 
-- Each callback runs until its first `await`, starts `writeFile`, and returns a pending promise.
-- `forEach` throws those promises away and returns right away.
-- `console.log("saved")` runs next, while the writes are still in progress.
-- `saveAll` resolves before the writes finish, so `await saveAll(items)` doesn't wait for them either.
-- If a write fails, the promise rejects with nothing handling it. Callers never see the error, and Node may crash the process with an unhandled rejection.
+- `saveAll` itself never awaits anything, so `console.log("saved")` runs right after the writes are started.
+- A rejected write also goes nowhere. It becomes an unhandled rejection instead of an error `saveAll`'s caller can catch.
 
-## Fix
-
-To write all files in parallel:
+Fix for parallel writes:
 
 ```js
 async function saveAll(items) {
@@ -835,19 +771,13 @@ async function saveAll(items) {
 }
 ```
 
-To write one file at a time:
+If you need writes one at a time, for example to limit open file handles on a large `items`, use a loop instead:
 
 ```js
-async function saveAll(items) {
-  for (const item of items) {
-    await fs.promises.writeFile(`out/${item.id}.json`, JSON.stringify(item));
-  }
-  console.log("saved");
+for (const item of items) {
+  await fs.promises.writeFile(`out/${item.id}.json`, JSON.stringify(item));
 }
 ```
-
-- `Promise.all` rejects on the first failed write, but the other writes keep going. Use `Promise.allSettled` if you need the result of every write.
-- If the list is very large, the parallel version can hit the open file limit (`EMFILE`). In that case, use the loop or write in batches.
 ````
 
 ## debug-default-arg
@@ -994,9 +924,7 @@ add_tag("b")   # ['b']
 ### debug-default-arg on 1
 
 ````markdown
-The default list is created once, when the function is defined, and every call without a `tags` argument reuses that same list.
-
-## Fix
+The default list is created once, when the function is defined, so every call that skips `tags` appends to that same list.
 
 Use `None` as the default and create a new list inside the function:
 
@@ -1008,32 +936,17 @@ def add_tag(tag, tags=None):
     return tags
 ```
 
-## Why it happens
-- Python evaluates default values once, at `def` time, not on each call.
-- `tags.append` changes that shared list in place, so tags from earlier calls stay in it.
-- `add_tag.__defaults__` shows the leftover tags.
-
-## Behavior to check
-- Callers that pass their own list still have that list changed in place. Use `tags = list(tags)` before appending if they should get a copy instead.
-- Code that relied on tags building up across calls will break with this fix. Search for callers that do this before changing it.
+- Use `is None`, not `if not tags`. With `if not tags`, a caller who passes their own empty list gets a new list back, and their list is never changed.
+- The same bug happens with any mutable default, such as `{}`, `set()`, or an object instance.
+- When a caller passes a list, the function still changes that list in place. If you don't want that, build a new list with `tags = [*(tags or []), tag]`.
 ````
 
 ### debug-default-arg on 2
 
 ````markdown
-The default list is created once, when the function is defined, and every call without `tags` reuses that same list.
+The default list is created once, when the `def` runs, not on each call. Every call that leaves out `tags` appends to that same list.
 
-## Why
-- Python evaluates default argument values one time, when `def` runs, not on each call.
-- `tags.append(tag)` changes that shared list in place, so the tags pile up across calls.
-
-```python
-add_tag("a")  # ['a']
-add_tag("b")  # ['a', 'b']
-```
-
-## Fix
-Use `None` as the default and create a new list inside the function:
+Fix it with a `None` default and create the list inside the function:
 
 ```python
 def add_tag(tag, tags=None):
@@ -1043,22 +956,15 @@ def add_tag(tag, tags=None):
     return tags
 ```
 
-## Caveat
-- If a caller passes in their own list, it still gets changed in place. If callers shouldn't see that change, copy it first with `tags = list(tags)`.
+- Check `is None`, not `if not tags`. With `if not tags`, a caller who passes their own empty list gets a new list back, and their list never changes.
+- The function still changes a list the caller passes in. If callers shouldn't see their list change, use `tags = list(tags)` before appending.
+- The same problem happens with any mutable default, such as `{}`, `set()` or an object instance.
 ````
 
 ### debug-default-arg on 3
 
 ````markdown
-The default list `[]` is created once, when the function is defined, so every call that skips `tags` appends to that same list.
-
-## Why
-- Python evaluates default values one time, at `def`, not on each call.
-- `tags.append` changes that one shared list in place.
-- `add_tag("a")` returns `["a"]`, then `add_tag("b")` returns `["a", "b"]`.
-
-## Fix
-Use `None` as the default and create a new list inside the function:
+The default list is built once, when the function is defined, so every call that skips `tags` appends to that same list. Use `None` as the default and create a new list inside the function:
 
 ```python
 def add_tag(tag, tags=None):
@@ -1068,8 +974,8 @@ def add_tag(tag, tags=None):
     return tags
 ```
 
-## Risk
-- If you pass in your own list, the function still changes that list. To leave the caller's list untouched, return a new list with `return [*(tags or []), tag]`.
+- Check with `is None`, not `if not tags`. With `if not tags`, a caller who passes their own empty list gets a new list back, and their list never changes.
+- The function still changes a list that the caller passes in. If callers don't expect that, copy it first with `tags = list(tags)`.
 ````
 
 ## debug-docker
@@ -1199,87 +1105,57 @@ Why this works:
 ### debug-docker on 1
 
 ````markdown
-Your container stops because `service nginx start` starts nginx as a background daemon and then exits, and Docker stops the container when PID 1 exits.
+The container stops because `service nginx start` starts nginx as a background daemon and then exits. A container lives only as long as its main process (PID 1), so when that command returns, the container stops.
 
-## Why
-- The `CMD` process runs as PID 1. The container lives only as long as PID 1 does.
-- `service nginx start` runs the init script, which starts nginx in the background and returns right away.
-- Once the script returns, PID 1 is gone, so the container exits. The nginx it started goes with it.
-
-## Fix
-Run nginx in the foreground as PID 1:
+Fix it by running nginx in the foreground as PID 1:
 
 ```dockerfile
 CMD ["nginx", "-g", "daemon off;"]
 ```
 
-- `daemon off;` keeps nginx in the foreground.
-- The exec (JSON array) form makes nginx PID 1 with no shell in between. It then gets `SIGTERM` from `docker stop` and shuts down cleanly.
-
-## Avoid
-- `CMD service nginx start && tail -f /dev/null` keeps the container up, but Docker would be watching `tail` instead of nginx. If nginx crashes, the container keeps running. Stop signals also don't reach nginx.
-
-## Check
-```
-docker run -d -p 8080:80 myimage
-docker ps
-docker logs <container>
-```
-If it still exits, `docker logs` will show the nginx error, such as a config syntax error.
+- **Use the exec form (JSON array).** The shell form `CMD nginx ...` wraps nginx in `/bin/sh -c`. The shell becomes PID 1 and does not pass on SIGTERM, so `docker stop` waits 10 seconds and then kills nginx.
+- **Log to stdout/stderr** if you want `docker logs` to show anything. Ubuntu's nginx package writes to files under `/var/log/nginx`. The official `nginx` image links those files to stdout and stderr:
+  ```dockerfile
+  RUN ln -sf /dev/stdout /var/log/nginx/access.log && ln -sf /dev/stderr /var/log/nginx/error.log
+  ```
+- **Consider switching to `FROM nginx`.** That image already runs nginx in the foreground and sends logs to Docker. The only downside is that you give up the Ubuntu base, if you need it for other packages.
 ````
 
 ### debug-docker on 2
 
 ````markdown
-`service nginx start` launches nginx in the background and returns right away. The container stops when its main process (PID 1) exits, so it stops as soon as that command finishes.
+`service nginx start` launches nginx as a background daemon and then returns. That command is PID 1, so when it exits the container stops.
 
-## Fix
-Run nginx in the foreground as the main process:
+Run nginx in the foreground instead:
 
 ```dockerfile
 CMD ["nginx", "-g", "daemon off;"]
 ```
 
-- **`daemon off;`** keeps nginx in the foreground, so the container keeps running.
-- **Exec form (JSON array)** makes nginx PID 1 instead of a shell. `docker stop` then reaches nginx and it shuts down cleanly.
-
-## Also check
-- **Logs:** Ubuntu's nginx package writes logs to `/var/log/nginx/`, so `docker logs` will show nothing. To see them there, add this to the Dockerfile:
-  ```dockerfile
-  RUN ln -sf /dev/stdout /var/log/nginx/access.log && ln -sf /dev/stderr /var/log/nginx/error.log
-  ```
-- **Config errors:** if it still exits after the fix, run `docker logs <container>` or `docker run --rm myimage nginx -t` to check for a bad nginx config.
-- **Simpler base:** the official `nginx` image already has the foreground setup and log redirects built in, if you don't need Ubuntu.
+- Use the exec form (JSON array) so nginx is PID 1 and receives `docker stop` signals directly. The shell form wraps it in `/bin/sh -c`, which does not forward SIGTERM, so stops wait out the 10-second timeout and then kill it.
+- Add `EXPOSE 80` and run with `-p 8080:80` if you need to reach it from the host.
+- The official `nginx` image already does this. Switch to it unless you need Ubuntu for something else.
 ````
 
 ### debug-docker on 3
 
 ````markdown
-The container exits because `service nginx start` starts nginx as a background daemon and then returns. Docker stops the container when the main process (PID 1) exits.
+Your CMD starts nginx as a background daemon and then returns, so the container's main process exits and Docker stops the container.
 
-## Fix
-Run nginx in the foreground so it stays PID 1:
+- A container lives only as long as PID 1. `service nginx start` forks nginx into the background and exits right away.
+- Fix: run nginx in the foreground as PID 1.
 
 ```dockerfile
 CMD ["nginx", "-g", "daemon off;"]
 ```
 
-## Notes
-- **Use the exec (JSON array) form.** The shell form `CMD nginx ...` runs nginx under `/bin/sh -c`. Then nginx is not PID 1 and does not receive `SIGTERM` from `docker stop`, so the container waits out the timeout and gets killed.
-- **Logs.** Ubuntu's nginx writes to `/var/log/nginx/*.log`, so `docker logs` shows nothing. If you want logs there, add this before the `CMD`:
-  ```dockerfile
-  RUN ln -sf /dev/stdout /var/log/nginx/access.log && ln -sf /dev/stderr /var/log/nginx/error.log
-  ```
-- **Alternative base image.** The official `nginx` image already does all of this. Use it unless you need Ubuntu for another reason.
+- Use the exec (JSON array) form. The shell form wraps the command in `/bin/sh -c`, so `docker stop` sends SIGTERM to the shell instead of nginx. You then wait out the 10 second timeout before a SIGKILL.
+- Avoid workarounds like `service nginx start && tail -f /dev/null`. The container stays up even if nginx crashes, and `docker stop` does not shut nginx down cleanly.
+- nginx logs go to files under `/var/log/nginx` by default, so `docker logs` shows nothing. To send them to Docker, add this to the Dockerfile:
 
-## Verify
-```sh
-docker run -d -p 8080:80 myimage
-docker ps
-curl localhost:8080
+```dockerfile
+RUN ln -sf /dev/stdout /var/log/nginx/access.log && ln -sf /dev/stderr /var/log/nginx/error.log
 ```
-
-If it still exits, run `docker logs <container>`. A config error makes nginx exit at startup, and that error will show up there.
 ````
 
 ## compare-db
@@ -1381,64 +1257,42 @@ None of these fit a users/orders/invoices app.
 ````markdown
 Use PostgreSQL.
 
-- **Relational data:** a user has many orders, an order has many invoices. Foreign keys and joins fit this directly.
-- **Transactions:** creating an order, its invoice and a stock or balance update must succeed or fail together. PostgreSQL has had full ACID transactions from the start. MongoDB added multi-document transactions later, and they cost more and are easier to misuse.
-- **Enforced integrity:** `NOT NULL`, `UNIQUE`, `CHECK` and foreign keys stop orphaned invoices and duplicate invoice numbers at the database level. In MongoDB, your application code has to enforce this.
-- **Money:** use the `numeric` type for exact amounts. Floats cause rounding errors.
-- **Reporting:** revenue per month, unpaid invoices and top customers are simple SQL queries. The same reports take more work in MongoDB's aggregation pipeline.
-- **Flexible fields:** if some data varies in shape, like product attributes or payment provider payloads, store it in a `jsonb` column. You don't need a second database for it.
+- Orders and invoices need ACID transactions across several tables, such as creating an order, reserving stock, and writing the invoice all at once. Postgres does this by default. MongoDB supports multi-document transactions, but they are slower and add more rules you have to follow.
+- Your data is relational: a user has many orders, and an order has line items and invoices. Foreign keys block orphaned invoices and bad references at the database level. MongoDB leaves that checking to your app code.
+- Invoices usually need an audit trail and fixed totals. Use `NUMERIC` for money, plus `CHECK` constraints and unique invoice numbers, and the database enforces correctness. In MongoDB, a missed validation in your code can leave wrong data behind.
+- Reporting like revenue per month, unpaid invoices, or top customers is plain SQL with joins. In MongoDB these are aggregation pipelines that get harder to write and maintain as the questions grow.
+- For flexible fields like product attributes or payment provider payloads, use `JSONB` columns. That covers most of what would push you toward MongoDB.
 
-## When MongoDB would be the better pick
-- Most of your data has no fixed shape and you rarely query across entities.
-- You expect write volume that one Postgres primary can't handle, and you need built-in sharding from day one. That is uncommon for a new app, so check it against real numbers before choosing on that basis.
-
-## Assumption
-- A1: You have no existing MongoDB setup or team skills that would change the cost of running it.
+MongoDB only wins if most of your data has no fixed shape, or you expect to shard for very high write volume from day one. Neither is typical for users, orders and invoices.
 ````
 
 ### compare-db on 2
 
 ````markdown
-Use PostgreSQL.
+PostgreSQL.
 
-- **The data is relational.** An order belongs to a user and an invoice belongs to an order. Foreign keys enforce those links, so you cannot end up with an invoice pointing at a deleted order.
-- **Money needs ACID transactions.** Creating an order, reserving stock and issuing an invoice should succeed or fail together. Postgres has always worked this way. MongoDB supports multi-document transactions, but they are an add-on to its design, not the default path.
-- **Invoices need a fixed structure.** Tax, totals and legal fields should follow a strict schema with `NUMERIC` amounts and `CHECK` constraints. Mongo's flexible schema is a drawback for this kind of data.
-- **Reporting is SQL.** Revenue per month, unpaid invoices per customer and similar questions are simple joins and aggregates.
-- **You still get flexibility.** A `JSONB` column can hold the parts that vary, such as product attributes or payment provider payloads.
+- Users, orders and invoices are relational data. An order belongs to a user and an invoice points to an order. Postgres enforces those links with foreign keys, so you can't end up with an invoice for an order that doesn't exist. MongoDB leaves that to your application code.
+- Invoices are money records. Postgres transactions are ACID and in use for decades, so "create order, reserve stock, issue invoice" either all succeeds or all fails. MongoDB has multi-document transactions, but they add limits and cost, and most Mongo tooling isn't built around them.
+- Reporting on this data is mostly joins and aggregates, like revenue per customer per month or unpaid invoices by age. That is plain SQL in Postgres. In MongoDB it means aggregation pipelines or copying data into each document, and copied data drifts out of sync when a user changes their address.
+- If you need flexible fields, like per-order metadata or payment provider payloads, use a `jsonb` column in Postgres. That covers the usual reason people choose MongoDB.
+- Invoices should be immutable snapshots. Store the billing address, line items and prices on the invoice itself instead of joining to the live user and product rows. Otherwise old invoices change when current data changes, whichever database you use.
 
-## When MongoDB would be the better choice
-- Most of your data has no fixed shape and is read as whole documents with few cross-entity queries. Users, orders and invoices do not fit that description.
-- Your team already runs Mongo in production and has no Postgres experience.
-
-## Assumption
-- A1: This is a normal-sized app. Postgres on a single node with read replicas handles millions of orders. If you expect write volume beyond one node from day one, that changes the question, but most apps never reach that point.
+MongoDB would make sense only if most of your data had no fixed shape and you rarely queried across entities. That doesn't describe users, orders and invoices.
 ````
 
 ### compare-db on 3
 
 ````markdown
-**Use PostgreSQL.** Users, orders and invoices are relational financial data, and that is what PostgreSQL is built for.
+Use PostgreSQL. Users, orders and invoices are relational data that must stay consistent, and that is what Postgres is built for.
 
-## Why
-- **Relationships:** users have orders and orders have invoices. Foreign keys stop you from creating an invoice for an order that doesn't exist, or deleting a user who still has orders.
-- **Transactions:** creating an order, its invoice and a payment record must all succeed or all fail. PostgreSQL does this by default. MongoDB supports multi-document transactions, but it was designed around single documents, and you have to opt in for every write.
-- **Constraints:** unique invoice numbers, non-negative totals and required fields are enforced by the database, not only by app code.
-- **Reporting:** revenue per month, orders per customer and unpaid invoices are simple SQL joins and aggregates. The same queries are more awkward in MongoDB's aggregation pipeline.
-- **Flexible data:** `jsonb` columns cover the few fields that really vary, such as product attributes or metadata. You don't need a document database for that.
+- **Transactions across tables.** Creating an order, decrementing stock and issuing an invoice must all succeed or all fail. Postgres does this by default. MongoDB has had multi-document transactions since 4.0, but they are more limited and add overhead, and you would use them on nearly every write.
+- **Integrity enforced by the database.** Foreign keys, `NOT NULL`, `CHECK` and unique constraints stop bugs like an invoice pointing to a deleted order, or two invoices with the same number. In MongoDB, your application code has to enforce all of this.
+- **Money needs exact types.** Use `numeric` for amounts, never floats. Mongo has `Decimal128`, but drivers and ORMs often fall back to doubles unless you are careful.
+- **Reporting is SQL.** Revenue per month, unpaid invoices per customer and similar questions are simple joins and `GROUP BY` queries. In Mongo these become aggregation pipelines or duplicated data.
+- **Invoices are legal records.** Store the line items, prices and tax as they were when the invoice was issued, and never recompute them from current product data. This matters in either database, but constraints in Postgres make it easier to enforce.
+- **You still get flexible fields.** Put variable parts, such as payment provider responses or per-customer metadata, in a `jsonb` column with a GIN index.
 
-## When MongoDB would be the better choice
-- Most data is independent documents with no joins, such as event logs or a CMS.
-- The schema changes often and you don't need data integrity guarantees.
-- Neither describes a system with orders and invoices.
-
-## Design risks for either database
-- **R1:** Store money as `numeric(12,2)` or integer cents, never `float`, which causes rounding errors.
-- **R2:** Freeze each invoice when you issue it. Copy line items, prices, tax and the billing address into the invoice rows instead of pointing to current product or user data. Otherwise past invoices change when a price or address changes.
-- **R3:** Generate invoice numbers with a sequence or a locked counter table. Many countries require gapless sequential numbers, and computing `max + 1` in app code creates duplicates when two invoices are issued at once.
-
-## Assumption
-- **A1:** This is a typical web app, not one with extreme write volume or multi-region needs. At that scale, PostgreSQL is still the default choice but needs more planning.
+Choose MongoDB only if most of your data has no fixed shape and you rarely query across entities. A billing system is the opposite case.
 ````
 
 ## compare-rpc
@@ -1539,83 +1393,69 @@ gRPC's real advantage is **enforced contracts**, not speed. You can get most of 
 ### compare-rpc on 1
 
 ````markdown
-**Use REST (HTTP/JSON with an OpenAPI spec)** unless one of the gRPC triggers below applies.
+**Use REST (JSON over HTTP) by default.** With five people and eight services, easy debugging and low tooling cost matter more than wire speed.
 
-## Why REST for your setup
-- Five people running eight services means ops time is the constraint. REST can be debugged with curl, browser dev tools, and the logs and ingress you already have.
-- Kubernetes Services balance REST traffic across pods without extra work.
-- An OpenAPI spec with generated clients gives you most of the typed-contract benefit of gRPC.
-- Your external APIs are probably already REST, so you keep one stack.
+**Why REST fits your team**
+- You can debug with `curl`, browser dev tools and plain logs. With gRPC you need `grpcurl`, server reflection and a way to decode protobuf when something breaks in the middle of the night.
+- gRPC needs a shared `.proto` repo, a code generation step in every service's CI, and rules for versioning the contracts. That is ongoing work a five-person team feels.
+- Kubernetes Services load-balance per connection. gRPC keeps one long-lived HTTP/2 connection, so all its traffic sticks to one pod unless you add client-side balancing or a service mesh (Linkerd, Istio). REST doesn't have this problem.
+- Ingress, API gateways and most observability tools handle REST with no extra setup.
 
-## Switch to gRPC if any of these apply
-- You need streaming, such as server push, bidirectional flows, or long-lived feeds.
-- Serialization or latency shows up in profiles on busy call paths. Assume it doesn't until you measure it.
-- Services in several languages keep breaking each other's contracts, and OpenAPI discipline hasn't fixed that.
+**Switch to gRPC, for specific calls only, if one of these is true**
+- You measured a latency or CPU problem in JSON serialization on a busy path. Fix that path, not all eight services.
+- You need streaming (server, client or both directions) and don't want WebSockets or SSE.
+- Services are written in several languages and the contracts keep drifting. Generated clients enforce the contract.
 
-## Risks if you pick gRPC
-- **R1:** gRPC keeps HTTP/2 connections open for a long time, so a standard Kubernetes Service sends all of a client's calls to one pod. Fixing this takes a headless Service with client-side load balancing, or a service mesh such as Linkerd or Istio. It is the most common production surprise.
-- **R2:** Debugging needs grpcurl or similar tools, and proto files need a shared repo plus versioning rules.
-- **R3:** Browsers and external clients can't call gRPC directly, so they need a gateway or grpc-gateway.
+**If you choose REST, get contract safety another way**
+- Write an OpenAPI spec for each service and generate clients from it. This fixes most of the type-safety gap with gRPC.
+- Set timeouts, retries with backoff, and idempotency keys on calls that change data. gRPC gives you deadlines built in, and REST does not.
 
-## Assumptions
-- **A1:** Nothing is streaming-heavy or latency-critical today.
-- **A2:** Your team doesn't already run protobuf tooling or a mesh. If it does, gRPC costs much less to adopt.
-
-If you do go gRPC later, you don't have to switch everything. Use it only on the service pairs that meet a trigger.
+Next step: pick the one call you think is most likely to need gRPC and check its p99 latency before deciding it does.
 ````
 
 ### compare-rpc on 2
 
 ````markdown
-Use REST (HTTP/JSON with an OpenAPI spec) unless one of the gRPC triggers below applies to you.
+**Use REST (JSON over HTTP) with an OpenAPI spec per service, unless one of the gRPC triggers below applies.** With five people, the cost you'll feel most is operations, not payload size or speed.
 
-## Why REST fits a team of five
-- **Tooling:** curl, browser dev tools, logs and API gateways read JSON directly. gRPC needs grpcurl, reflection and proto-aware proxies.
-- **Kubernetes load balancing:** gRPC keeps HTTP/2 connections open for a long time, so a standard ClusterIP Service sends all calls from one client pod to one server pod. Fixing that means a headless Service with client-side load balancing, or a service mesh such as Linkerd or Istio. Five people shouldn't take on that work without a clear payoff.
-- **Contracts:** Generating clients from OpenAPI gets you most of the typed-contract benefit people want from protobuf.
-- **Hiring and onboarding:** Anyone new already knows REST.
+**Why REST fits your size**
+- You can debug with `curl`, browser dev tools, and your ingress and log tooling as they are. gRPC needs `grpcurl`, reflection enabled, and proto files on hand when things break.
+- An OpenAPI spec with generated clients gives you most of gRPC's typed-contract benefit without adding a protobuf toolchain to every repo.
+- Eight services is few enough that JSON encoding cost rarely shows up in latency.
 
-## When to pick gRPC instead
-| Code | Trigger |
-|---|---|
-| O1 | You need streaming, either server push or bidirectional |
-| O2 | Heavy call volume where JSON encoding or latency shows up in profiles |
-| O3 | Services in 3 or more languages where strict schema evolution rules matter |
-| O4 | You already run a service mesh, so the load balancing problem is already handled |
+**The Kubernetes catch with gRPC**
+- gRPC keeps one HTTP/2 connection open per client, and a regular ClusterIP Service balances connections, not requests. One pod ends up taking all the traffic while the other replicas sit idle.
+- To fix it you need a headless Service with client-side load balancing (`dns:///` resolver plus `round_robin`), or a service mesh like Linkerd or Istio. Either way it's more to set up and maintain.
 
-## Assumptions
-- A1: None of O1 to O4 applies today. If one does, use gRPC for those specific calls only. Mixing is fine.
-- A2: The services talk to each other synchronously. If most of the traffic is events, a queue matters more than this choice.
+**Pick gRPC if any of these are true**
+- You need streaming, such as server push, bidirectional streams, or long-running jobs that report progress.
+- A hot path makes many calls per request and you've measured serialization or latency as a real cost.
+- Your services use several languages and contracts keep drifting, so you want one schema enforced at build time.
 
-## Risk
-- R1: REST without a spec drifts over time. Require an OpenAPI file per service and generate clients from it in CI.
+**Middle option:** if you want protobuf contracts without losing `curl`, use Connect RPC (connectrpc.com). One server handles gRPC and plain HTTP/JSON. The downside is fewer supported languages and a smaller community than gRPC or REST.
+
+Whichever you pick, use it for all eight services. Running both styles means maintaining two sets of tooling, auth middleware, and retry logic.
 ````
 
 ### compare-rpc on 3
 
 ````markdown
-**Use REST (HTTP/JSON) with OpenAPI specs.** Five people running eight services will lose more time to gRPC tooling and operations than they gain in speed.
+**Use REST (HTTP/JSON with an OpenAPI spec per service) as the default.** At five people and eight services, gRPC's gains are unlikely to be worth what it costs you to run it.
 
-## Why REST
-- **Debugging:** curl, browser devtools, logs and proxies can read the traffic directly. With gRPC you need grpcurl and the proto files.
-- **No codegen pipeline:** gRPC needs a shared proto repo, versioned generated clients and a codegen step in CI for every service. That is ongoing work for a small team.
-- **Contracts:** OpenAPI gives you typed clients and schema checks, which covers most of what gRPC's contracts would give you.
-- **Kubernetes works as is:** ingress, health checks and most observability tools handle HTTP/1.1 JSON without setup.
+Why REST fits here:
+- **Load balancing works as is.** gRPC holds long-lived HTTP/2 connections, and a Kubernetes Service balances per connection, not per request. All traffic from one client pod sticks to one server pod, and new replicas get little traffic after a scale-up. To fix that with gRPC you need client-side load balancing against a headless Service, or a service mesh. That's one more system for five people to own.
+- **Debugging is cheaper.** curl, logs, ingress tooling and browser devtools all read JSON directly. With gRPC you need grpcurl, reflection turned on, and proto files on hand for every incident.
+- **Less build tooling.** gRPC adds protoc, generated code and a place to keep shared protos in every service's build.
+- **Covers REST's main weakness.** REST contracts can quietly drift between services. You close most of that gap by generating clients from the OpenAPI specs and checking the specs in CI.
 
-## gRPC risk on Kubernetes
-- **R1:** A normal ClusterIP Service balances per connection. gRPC keeps HTTP/2 connections open for a long time, so one client pod can send all its traffic to a single server pod. To fix it you need a headless Service with client-side load balancing, or a service mesh (Linkerd, Istio). Either one is more to run.
-- **R2:** Proto changes that break compatibility, such as renumbering or reusing field numbers, fail silently at runtime. You need linting like `buf breaking` in CI to catch them.
+Pick gRPC instead if any of these is true now, not someday:
+- You need streaming, like server push, bidirectional flows or large result sets.
+- Serialization or latency shows up in your profiles on hot internal paths with high call volume.
+- The services are written in several languages and contract drift has already caused incidents.
 
-## When to switch to gRPC
-Switch only for the service pair that needs it, not the whole system.
-- You need streaming, such as server push or bidirectional streams.
-- A measured latency or CPU problem traces back to JSON serialization on a high-traffic path.
-- Payloads are large and bandwidth costs you money.
+You don't have to pick one for everything. You can start with REST and move a single hot or streaming path to gRPC later without changing the rest.
 
-## Assumptions
-- **A1:** Calls are mostly request/response, with no streaming today.
-- **A2:** No one has measured a performance problem between services.
-- **A3:** You don't already run a service mesh. If you do, R1 mostly goes away and gRPC costs less, but the codegen work still makes REST the better default.
+Next step: add an OpenAPI spec and a generated client to the two services that call each other most, and see whether contract drift is actually a problem for you.
 ````
 
 ## summarize-retry
@@ -1747,79 +1587,60 @@ diff --git a/src/http.js b/src/http.js
 ### summarize-retry on 1
 
 ````markdown
-`request()` in `src/http.js` now retries failed requests with exponential backoff and has a longer timeout.
+`request()` now retries failed calls with exponential backoff and waits up to 30s per attempt instead of 10s.
 
-## Changes
-- **Retries:** new third parameter `retries`, default 3, so up to 4 attempts. Existing callers keep working without changes.
-- **Retry triggers:** HTTP 5xx responses, and any error thrown inside the `try`, including network errors and timeouts.
-- **Backoff:** waits 500ms, 1s, then 2s between attempts, with no jitter.
-- **Timeout:** 10s to 30s per attempt.
-- **After the last attempt:** the last error is thrown. A final 5xx throws `HTTP <status>`.
+**What changed**
+- Up to 3 retries (4 attempts total) on 5xx responses and on thrown errors such as network failures and timeouts.
+- Backoff is 500ms, 1s, then 2s, with no jitter.
+- Per-attempt timeout goes from 10s to 30s.
+- New optional third parameter `retries`, default 3.
 
-## Risks
-- **R1, bug:** 4xx responses are also retried. The `throw new Error(...)` for `!res.ok` is inside the `try`, so the `catch` retries it. A 404 or 401 makes 4 attempts and waits 3.5s before failing. Either check `err` in the `catch` or move the 4xx throw out of the `try`.
-- **R2:** Non-idempotent requests like POST and PATCH get retried too. After a timeout or a 5xx, the server may already have applied the request, so a retry can apply it twice.
-- **R3:** A failing call can now take about 123.5s before it throws: 4 attempts × 30s plus 3.5s of backoff. Callers that relied on failing within 10s will now wait much longer.
-- **R4:** The retry does not replace `options.signal` with a caller signal. `AbortSignal.timeout` still overrides any `options.signal`, so callers can't cancel, and now that covers the whole retry loop. This existed before the change but matters more with retries.
-- **R5:** If `options.body` is a stream, it's used up by the first attempt, so retries send an empty or broken body.
-- **R6:** Without jitter, many clients that fail at once all retry at the same moments, which adds load to a server that is already failing.
-
-## Notes
-- `return res.json()` is not awaited inside the `try`, so a JSON parse error rejects right away without a retry. That's probably the right behavior, but it's easy to break if someone adds `await` later.
-- The diff has no tests.
+**Issues to raise**
+- **4xx errors are retried.** The `throw new Error(`HTTP ${res.status}`)` sits inside the `try`, so the `catch` retries it. A 404 or 401 makes 4 calls and waits 3.5s before failing. The fix is to only retry in `catch` when the error did not come from a received response.
+- **Writes can be duplicated.** Retries ignore the HTTP method. A POST that times out after the server processed it will run again. Retries should be limited to idempotent methods, or callers should opt in.
+- **Worst-case latency is now about 124s** (4 × 30s plus 3.5s of backoff), up from 10s. Any caller with its own timeout or a UI waiting on this will behave differently.
+- **5xx response bodies are never read before a retry.** In Node's fetch, this can keep connections open until garbage collection. Calling `await res.body?.cancel()` before sleeping avoids that.
+- **JSON parse errors are not retried.** `return res.json()` is not awaited, so its rejection skips the `catch`. That is probably the right behavior, but it looks accidental.
+- **No tests in the diff.** None of the retry paths are covered.
 ````
 
 ### summarize-retry on 2
 
 ````markdown
-This change adds retry with exponential backoff to `request()` in `src/http.js` and raises the per-attempt timeout from 10s to 30s.
+`request()` in `src/http.js` now retries failed requests up to 3 times, waiting 500ms, 1s, then 2s between tries. The per-attempt timeout goes from 10s to 30s. Callers don't need changes because `retries` is a new optional third argument.
 
-## Behavior changes
-- **New parameter:** `retries`, default 3, so up to 4 attempts in total.
-- **Retried:** 5xx responses, network errors and timeouts.
-- **Backoff:** 500ms, 1000ms, then 2000ms between attempts, with no jitter.
-- **Timeout:** 30s per attempt, up from 10s.
-- **Unchanged:** after the last attempt it throws `HTTP <status>` or the original error.
+**What changed**
+- A 5xx response or any thrown error (network failure, timeout, JSON parse error) triggers a retry. Once retries run out, the last error is thrown.
 
-## Risks
-- **R1, 4xx responses are retried (bug).** `throw new Error(...)` runs inside the `try`, so the `catch` retries every failed response, including 4xx. A 404 or 401 costs 4 requests and about 3.5s before it fails. The 5xx check suggests the intent was to retry only 5xx.
-- **R2, repeated side effects.** Every method is retried, including POST and PATCH. If the server acted on a request but then timed out or returned 5xx, the retry repeats the action.
-- **R3, much longer worst case.** One call can now take about 123.5s (4 × 30s plus 3.5s of backoff), up from 10s. Callers and upstream timeouts may need to change.
-- **R4, stream bodies.** A `ReadableStream` body is used up by the first attempt, so later attempts fail or send an empty body.
-- **R5, JSON parse errors skip the retry logic.** `return res.json()` has no `await`, so a parse failure rejects outside the `try`. That is probably the right outcome, but it looks accidental.
-- **R6, caller `signal` is ignored.** `options.signal` is still overwritten, as before. With retries, a caller can no longer cancel a call that may run for 2 minutes.
-- **R7, `Retry-After` is ignored.** The header on 503 responses is not used.
+**Findings for the reviewer**
+- **F1: 4xx responses get retried.** The `HTTP ${res.status}` error is thrown inside the `try`, so the `catch` retries it. A 404 or 401 makes 4 calls and adds 3.5s of waiting before it fails. The `!res.ok` throw should skip the retry path.
+- **F2: POST and other write requests get retried.** Nothing checks `options.method`. A timeout or 5xx after the server has already acted can repeat the write, for example a double charge or a duplicate record. Retries should be limited to idempotent methods, or callers should have to opt in.
+- **F3: Worst-case latency grows from 10s to about 124s** (4 × 30s plus 3.5s of waiting). Any caller with its own deadline, UI spinner, or request handler timeout will now give up before `request()` does.
+- **F4: Callers can't cancel.** `signal` still overwrites any `options.signal` the caller passes, and the waits between retries ignore abort. This was already true before, but the longer worst case makes it matter more.
+- **F5: `Retry-After` is ignored and 429 is not retried.** There is also no jitter, so many clients that fail together will retry at the same moments.
 
-## Suggested fixes
-- **R1:** track whether the error came from a response, and only retry network errors and 5xx.
-- **R2:** limit retries to idempotent methods by default.
-- **R6:** combine the caller's signal with the timeout using `AbortSignal.any`.
-
-None of this was run. The findings come from reading the diff only.
+Next step: fix F1 and F2 before merging. Both change behavior for existing callers.
 ````
 
 ### summarize-retry on 3
 
 ````markdown
-This change makes `request()` in `src/http.js` retry failed requests up to 3 times, waiting longer before each retry, and raises the per-attempt timeout from 10s to 30s.
+This change adds retries with exponential backoff to `request()` and raises the per-attempt timeout from 10s to 30s. It has one bug and one safety risk to settle before merge.
 
-## Changes
-- **New `retries` parameter:** the third parameter defaults to 3, so a call makes up to 4 attempts. Existing callers keep working without changes.
-- **Retry triggers:** 5xx responses and any error thrown inside the `try` block.
-- **Backoff:** waits 500ms, 1000ms, then 2000ms between attempts, with no randomness added.
-- **Timeout:** each attempt now has 30s instead of 10s.
-- **After the last retry:** a 5xx throws `HTTP <status>` and a network error or timeout is rethrown as is.
+**What changed**
+- A new third parameter, `retries`, defaults to 3, so a call can make up to 4 attempts. Existing callers don't need changes.
+- The wait between attempts is 500ms, then 1s, then 2s. There is no jitter, and `Retry-After` is ignored.
+- A retry happens on a 5xx response or on any thrown error, including network failures and timeouts.
 
-## Findings
-- **F1, 4xx is retried by mistake:** the `HTTP ${res.status}` error is thrown inside `try`, so `catch` catches it and retries. A 400, 401, 403 or 404 gets 4 attempts and about 3.5s of added delay before failing. The 5xx check suggests only server errors were meant to be retried.
-- **F2, POST can run more than once:** every HTTP method is retried. If a POST or PATCH reaches the server but then times out or gets a 5xx, it is sent again and its side effects can repeat.
-- **F3, much longer worst case:** a failing call can now take 4 × 30s + 3.5s = about 123s, up from 10s. Callers and any upstream timeouts that relied on the 10s limit need checking.
-- **F4, JSON errors are not retried:** `return res.json()` is not awaited, so a bad response body rejects outside the `try` block and fails right away. This may be fine, but it is not consistent with the other errors.
-- **F5, response body left unread:** when a 5xx is retried, its body is never read. In Node's `fetch`, an unread body can keep its connection open until garbage collection. Under heavy retrying this could exhaust the connection pool.
-- **F6, 429 ignores `Retry-After`:** a 429 is only retried because of F1, and the fixed backoff ignores the server's `Retry-After` header.
+**Findings**
+- **F1 (bug):** 4xx responses get retried. The `throw new Error(\`HTTP ${res.status}\`)` sits inside the `try`, so its own `catch` catches it and retries. A 404 or 401 takes about 3.5s and 4 requests to fail instead of failing at once. The fix is to rethrow non-5xx HTTP errors without retrying.
+- **F2 (risk):** The retry ignores the HTTP method. A POST that timed out or got a 5xx may already have been processed by the server, so retrying it can create duplicates such as double orders or double charges. Retries should be limited to idempotent methods, or callers should have to opt in.
+- **F3 (risk):** The worst-case time before an error rises from 10s to about 124s (4 × 30s plus 3.5s of waiting). Any caller with its own deadline, or a request handler waiting on this call, will now hang much longer before it sees the error.
+- **F4:** `options.signal` is still overwritten by the timeout signal, so callers can't cancel a request. This bug already existed, but a caller can now be stuck for up to 2 minutes instead of 10s. Combining the two signals with `AbortSignal.any([options.signal, AbortSignal.timeout(30000)])` fixes it.
+- **F5:** The body of a retried 5xx response is never read. In Node's fetch this can keep the connection busy until garbage collection. Calling `res.body?.cancel()` before the sleep avoids that.
+- **F6:** JSON parse errors are not retried. `return res.json()` hands back the promise without `await`, so the `catch` never sees its rejection. That is probably the right behavior, but it looks accidental. If it's intended, a comment should say so.
 
-## Not verified
-- The diff has no tests, so the retry behavior has not been tested.
+The diff has no tests, so nothing above has been run. Before approving, ask for tests that cover a 4xx failing fast (F1) and a POST not being retried (F2).
 ````
 
 ## plan-reset
@@ -2176,222 +1997,198 @@ Two things decide the details: how sessions work (cookie sessions or JWTs) and w
 ### plan-reset on 1
 
 ````markdown
-The plan uses a single-use, hashed, short-lived token stored in a new Postgres table. There are two endpoints: one requests a reset and one confirms it. I haven't read your codebase, so the assumptions below need checking first.
-
-## Assumptions
-- **A1** `users` has a unique `email` column and a `password_hash` column.
-- **A2** The app already hashes passwords with bcrypt or argon2. The reset flow reuses that same function.
-- **A3** The app can't send email yet.
-- **A4** Logins create sessions or refresh tokens that are stored somewhere the app can revoke them.
-
-## Decisions
-- **D1** Store the token in a database table, not a signed JWT. A table row can be used once and revoked, and a JWT can't.
-- **D2** Tokens expire after 30 minutes.
-- **D3** Pick an email provider: Postmark, SES or Resend, sent through their SDK or through SMTP with `nodemailer`. You decide which.
-- **D4** A successful reset logs the user out of all sessions.
+Add a `password_reset_tokens` table and two endpoints, `POST /auth/forgot-password` and `POST /auth/reset-password`. Store only a hash of each token, make tokens single-use and short-lived, and end the user's sessions after a reset. I haven't seen your code, so this assumes `users.email` is unique and passwords are already hashed with bcrypt or argon2.
 
 ## Steps
+
 1. **Migration**
    ```sql
    CREATE TABLE password_reset_tokens (
      id          bigserial PRIMARY KEY,
      user_id     bigint NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-     token_hash  bytea NOT NULL UNIQUE,
+     token_hash  text NOT NULL UNIQUE,
      expires_at  timestamptz NOT NULL,
      used_at     timestamptz,
      created_at  timestamptz NOT NULL DEFAULT now()
    );
-   CREATE INDEX ON password_reset_tokens (user_id);
+   ALTER TABLE users ADD COLUMN password_changed_at timestamptz;
    ```
-2. **Email module:** a `sendMail(to, subject, text, html)` wrapper for the D3 provider. Settings come from env vars: `MAIL_FROM`, API key, `APP_URL`.
-3. **`POST /auth/password-reset/request`** with body `{ email }`
-   - Always return the same `202` response, whether or not the email exists.
-   - Look up the user with `lower(email)`.
-   - If the user exists:
-     - Delete their unused tokens.
-     - Generate `crypto.randomBytes(32)` and store its SHA-256 hash with `expires_at = now() + 30 min`.
-     - Email the link `${APP_URL}/reset-password?token=<raw token>`.
-   - Send the email after responding, so response time doesn't reveal whether the account exists.
-4. **`POST /auth/password-reset/confirm`** with body `{ token, newPassword }`, all in one transaction:
-   - Hash the token and run `SELECT ... FOR UPDATE WHERE token_hash = $1 AND used_at IS NULL AND expires_at > now()`.
-   - If no row matches, return `400` with a generic "invalid or expired link" message.
-   - Check `newPassword` against the existing password policy.
-   - Update `users.password_hash`.
-   - Set `used_at` on the token and delete the user's other tokens.
-   - Revoke all sessions and refresh tokens (D4).
-   - Commit, then send a "your password was changed" email.
-5. **Rate limiting** on both endpoints, per IP and per email. Example: 5 requests per 15 minutes.
-6. **Frontend reset page:** reads the token from the URL, posts it to `/confirm` and sets `Referrer-Policy: no-referrer`.
-7. **Cleanup:** a daily job that deletes expired and used tokens.
-8. **Tests:**
-   - Unknown email gets the same response as a known one.
-   - Expired token is rejected.
-   - A token can't be used twice.
-   - Two concurrent confirms with one token: only one succeeds.
-   - Sessions are revoked after a reset.
-   - Rate limit triggers.
+   Store a SHA-256 of the token, not the token itself. If the database leaks, nobody can use the stored values to reset a password. SHA-256 is enough here because the token is 32 random bytes, so it doesn't need a slow hash like bcrypt.
+
+2. **`POST /auth/forgot-password` `{ email }`**
+   - Always send the same `202` response, whether or not the account exists. Otherwise the endpoint tells anyone which emails have accounts.
+   - Look up the user with `lower(email)`, or whatever normalization signup already uses.
+   - If the user exists, delete their unused tokens. Then create `crypto.randomBytes(32).toString('base64url')`, store its hash with `expires_at = now() + interval '30 minutes'`, and email the link.
+   - Queue the email or send it without awaiting it before you respond. If you wait for the provider, response time reveals which emails exist.
+   - Build the link from a config value like `APP_BASE_URL`, never from `req.headers.host`. An attacker can set the Host header and get a reset link pointing at their own domain.
+
+3. **`POST /auth/reset-password` `{ token, newPassword }`**, in one transaction:
+   ```sql
+   UPDATE password_reset_tokens
+      SET used_at = now()
+    WHERE token_hash = $1 AND used_at IS NULL AND expires_at > now()
+   RETURNING user_id;
+   ```
+   - No row returned means the token is invalid. Send one generic `400` for every failure reason.
+   - Claiming the token in a single conditional `UPDATE` means two concurrent requests can't both use it.
+   - Check the new password against the same rules as signup and hash it with your existing hasher. Update `users.password_hash` and `password_changed_at`, and delete the user's other reset tokens.
+   - Revoke sessions and refresh tokens. How depends on Q1.
+   - Send a "your password was changed" email so the account owner notices a takeover.
+
+4. **Rate limiting.** Limit `forgot-password` per IP and per email, for example 5 requests per hour per email. This stops attackers from using the endpoint to flood someone's inbox or run up your email bill. Limit `reset-password` per IP.
+
+5. **Reset page.** The token sits in the URL, so set `Referrer-Policy: no-referrer` on that page and keep analytics and third-party scripts off it. Otherwise the token can leak to those services through the referrer or URL logs.
+
+6. **Cleanup job.** Run `DELETE FROM password_reset_tokens WHERE expires_at < now() - interval '1 day'` daily.
+
+7. **Tests.** Cover an unknown email getting the same response as a known one, expired tokens, reused tokens, two concurrent resets with the same token, the old session being rejected after a reset, and rate limits.
 
 ## Risks
-- **R1** Building the link from the request's `Host` header lets an attacker send users a link to their own domain. Build it only from `APP_URL`.
-- **R2** Raw tokens can leak through request logs, error trackers or the `Referer` header. Remove `token` from logs and keep step 6's header.
-- **R3** Without rate limits, attackers can flood users' inboxes and burn your provider quota.
-- **R4** Without SPF, DKIM and DMARC on the sending domain, reset emails will land in spam. This needs DNS access.
-- **R5** If A4 is wrong and sessions are stateless JWTs, D4 needs a `password_changed_at` column on `users` that JWT checks compare against.
 
-Next step: confirm A1 through A4 against the actual code before writing the migration.
+- **R1.** If the app uses stateless JWTs, a stolen token keeps working after the reset unless auth middleware rejects JWTs whose `iat` is earlier than `password_changed_at`.
+- **R2.** If the email provider doesn't have SPF and DKIM set up for your sending domain, reset emails will land in spam and users will think the feature is broken.
+- **R3.** If `users.email` isn't unique ignoring case, one address can match several accounts. Check with `SELECT lower(email), count(*) FROM users GROUP BY 1 HAVING count(*) > 1` before building on it.
+
+## Questions
+
+- **Q1.** Are sessions stored server-side (for example `express-session` with a Postgres store) or are they JWTs? Server-side sessions: delete the user's rows. JWTs: add the `password_changed_at` check from R1.
+- **Q2.** Which email provider is already set up, if any? If none, use Postmark or SES through `nodemailer`.
+
+Next: answer Q1, because it decides how step 3 revokes sessions.
 ````
 
 ### plan-reset on 2
 
 ````markdown
-Plan: store a hashed, single-use, 30-minute token in a new Postgres table, add two endpoints (request and confirm), and send the link through a transactional email provider. I haven't seen your code, so this is based on the assumptions below.
+# Plan: password reset by email
 
-## Assumptions
-- **A1** `users` has a unique `email` column and a `password_hash` column.
-- **A2** Passwords are already hashed with bcrypt or argon2. Reset uses the same function.
-- **A3** Auth uses either server-side sessions or JWTs. This decides how D3 works.
-- **A4** A migration tool is in place, such as knex, node-pg-migrate or Prisma.
-
-## Decisions
-- **D1** Email provider. Use Postmark, SES or Resend through its API. Use nodemailer SMTP only if you already run SMTP.
-- **D2** Token lifetime. Use 30 minutes and allow one use.
-- **D3** Log out other sessions after a reset. With sessions, delete the user's session rows. With JWTs, add `users.password_changed_at` and reject tokens issued before it.
-- **D4** Do not log the user in automatically after a reset. Send them to the login page.
+Store a random single-use token as a hash in a new Postgres table, email a link to the user, and have a confirm endpoint that sets the new password and signs the user out everywhere. I haven't seen the app's code, so this plan assumes passwords are already hashed with bcrypt or argon2 and that sessions or refresh tokens live somewhere you can revoke.
 
 ## Steps
-1. **AC1** Migration:
+
+1. **Migration.** Store only the SHA-256 hash of each token. If the database leaks, the attacker still can't use the reset links.
    ```sql
    CREATE TABLE password_reset_tokens (
      id          bigserial PRIMARY KEY,
      user_id     bigint NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-     token_hash  bytea NOT NULL UNIQUE,
+     token_hash  text NOT NULL UNIQUE,
      expires_at  timestamptz NOT NULL,
      used_at     timestamptz,
      created_at  timestamptz NOT NULL DEFAULT now()
    );
    CREATE INDEX ON password_reset_tokens (user_id);
    ```
-   If D3 uses JWTs, also add `users.password_changed_at timestamptz`.
-2. **AC2** Email module: a `sendPasswordResetEmail(to, link)` function plus a "your password was changed" email. Read provider keys from env.
-3. **AC3** `POST /auth/password-reset/request` with body `{ email }`:
-   - Normalize the email with `trim().toLowerCase()` and look up the user.
-   - If the user exists, delete their unused tokens. Then create a token with `crypto.randomBytes(32).toString('base64url')` and store its SHA-256 hash with `expires_at = now() + 30 min`.
-   - Build the link from `APP_BASE_URL` in env: `${APP_BASE_URL}/reset-password?token=...`.
-   - Send the email without awaiting it, or through a queue, so response time is the same whether or not the user exists.
-   - Always return `202` with the same body.
-4. **AC4** `POST /auth/password-reset/confirm` with body `{ token, newPassword }`, in one transaction:
-   - Check `newPassword` against your existing password rules.
-   - Run `SELECT ... WHERE token_hash = $1 AND used_at IS NULL AND expires_at > now() FOR UPDATE`. If there is no row, return `400` with a generic "invalid or expired link" message.
-   - Update `users.password_hash`, and `password_changed_at` if you use it.
-   - Set `used_at` on this token and delete the user's other tokens.
-   - Log out other sessions as decided in D3.
-   - Commit, then send the "password changed" email.
-5. **AC5** Rate limits. On request: 5 per IP per 15 minutes and 3 per email per hour. On confirm: 10 per IP per 15 minutes.
-6. **AC6** Reset page on the frontend. It reads `token` from the URL, sets `Referrer-Policy: no-referrer`, and submits to AC4.
-7. **AC7** Cleanup job: delete rows where `expires_at < now() - interval '1 day'`.
-8. **AC8** Tests:
-   - Unknown email and known email return the same response.
-   - Expired, used and wrong tokens are rejected.
-   - A token cannot be used twice, including two requests at once.
-   - Old sessions or JWTs are rejected after a reset.
-   - The new password logs in and the old one fails.
+2. **`POST /auth/password-reset/request` `{ email }`**
+   - Look up the user with `lower(email) = lower($1)`, unless the column is already `citext`.
+   - If the user exists:
+     - Delete their unused tokens.
+     - Create a new token with `crypto.randomBytes(32).toString('base64url')`.
+     - Insert its hash with `expires_at = now() + interval '30 minutes'`.
+     - Queue the email.
+   - Always return the same `202` with the same body, whether or not the user exists. Send the email after responding so response time doesn't reveal which emails have accounts.
+   - Rate limit by IP and by email, for example 5 per hour per email. Without a limit the endpoint can be used to flood someone's inbox.
+3. **Email link.** Build it from a configured `APP_URL`, never from `req.headers.host`. Otherwise an attacker can send a request with a forged Host header and get a real reset email that points to their own domain. Use your existing email provider through nodemailer, or add one (SES, Postmark).
+4. **`POST /auth/password-reset/confirm` `{ token, password }`.** Do all of this in one transaction:
+   ```sql
+   UPDATE password_reset_tokens
+      SET used_at = now()
+    WHERE token_hash = $1 AND used_at IS NULL AND expires_at > now()
+   RETURNING user_id;
+   ```
+   - If no row comes back, return one generic "invalid or expired" error.
+   - Otherwise:
+     - Hash the new password with the same function and cost as signup.
+     - Update `users`.
+     - Delete the user's other reset tokens.
+     - Revoke all of the user's sessions and refresh tokens.
+   - Doing the claim in a single `UPDATE ... WHERE used_at IS NULL` means two requests racing with the same token can't both succeed.
+   - Apply the same password rules as signup.
+5. **Reset page.** Send `Referrer-Policy: no-referrer` and load no third-party scripts on it. The token is in the URL and would otherwise leak through the Referer header or analytics.
+6. **Notify.** Email the user a "your password was changed" message after a successful reset. That's how they find out if someone else did it.
+7. **Tests:**
+   - Unknown email gets the same response as a known one.
+   - Expired token is rejected.
+   - A token can't be used twice.
+   - Old sessions are rejected after a reset.
+   - A second request makes the first token invalid.
+   - Rate limit returns 429.
+   - Link uses `APP_URL` even when the Host header is forged.
 
-## Risks
-- **R1** Attackers can find which emails have accounts if the response body, status or timing differs. AC3 handles this, and AC8 must test it.
-- **R2** Building the link from `req.headers.host` lets an attacker send users a link to their own domain. Use only `APP_BASE_URL`.
-- **R3** The token can leak through access logs that record query strings, or through the Referer header. Remove `token` from logs and set the header from AC6.
-- **R4** If JWTs are used and D3 is skipped, stolen tokens keep working after a reset.
-- **R5** If `users.email` is stored with mixed case and has no case-insensitive unique index, lookups can miss users or match the wrong one. Check before AC3.
-- **R6** Reset emails will land in spam if the sending domain has no SPF, DKIM and DMARC records. Set these up with the D1 provider before launch.
-- **R7** Storing the raw token instead of its hash means a database leak gives attackers working reset links.
+## Decisions
 
-Next: confirm A3 (sessions or JWTs), because it decides how D3 and AC4 are built.
+- **Database token instead of a signed JWT.** A JWT can't be made single-use or revoked unless you also store state for it, and at that point the table is simpler.
+- **30-minute expiry.** This is a judgment call. Anything past an hour leaves a stolen link usable for longer.
+
+## Open questions
+
+- **Q1:** Which email provider is already set up, if any?
+- **Q2:** Where do sessions live (express-session store, JWT with refresh tokens, or something else)? Step 4 depends on being able to revoke them.
+- **Q3:** Does the rate limiter need to work across several app instances? If so, use Redis or Postgres. An in-memory limiter only counts per instance.
+
+Next: answer Q2, since it decides how step 4 revokes sessions.
 ````
 
 ### plan-reset on 3
 
 ````markdown
-# Plan: password reset by email
+Store a hashed, single-use, short-lived token in a new table, and add two endpoints: one emails a link, the other checks the token and sets the new password.
 
-Store a hashed, single-use, 30-minute reset token in a new `password_reset_tokens` table. Email a link that carries the raw token. Accept the new password with a POST that uses the token once, then signs the user out of every existing session.
+## Schema
 
-## Assumptions
-- **A1** Passwords are already hashed with bcrypt or argon2. Reset will use the same hash function.
-- **A2** `users.email` is unique and matched without regard to case, using `citext` or `lower(email)`.
-- **A3** The app has server-side sessions or a way to revoke tokens. If it uses stateless JWTs, see D4.
-- **A4** The frontend has a page at `/reset-password` that can read the token from the URL.
+```sql
+CREATE TABLE password_reset_tokens (
+  id          bigserial PRIMARY KEY,
+  user_id     <users.id type> NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  token_hash  bytea NOT NULL UNIQUE,
+  expires_at  timestamptz NOT NULL,
+  used_at     timestamptz,
+  created_at  timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX ON password_reset_tokens (user_id);
+```
 
-## Decisions
-- **D1** Put tokens in their own table, not in columns on `users`. This allows several pending requests, an audit trail and easy cleanup.
-- **D2** Store only the SHA-256 hash of the token. If the database leaks, the stored tokens cannot be used. A fast hash is safe here because the token has 256 bits of randomness.
-- **D3** Tokens expire after 30 minutes and work only once. A new request cancels any older unused tokens.
-- **D4** A successful reset revokes all sessions. With JWTs, add `users.password_changed_at` and reject tokens issued before it.
+- Store only the SHA-256 of the token. If the database leaks, stored tokens can't be used. SHA-256 is enough here (no bcrypt needed) because the token has 256 bits of randomness.
+- If you use JWTs, also add `users.password_changed_at`. You need it to invalidate existing logins (step 5).
 
 ## Steps
-1. **Migration**
-   ```sql
-   CREATE TABLE password_reset_tokens (
-     id          bigserial PRIMARY KEY,
-     user_id     bigint NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-     token_hash  bytea NOT NULL UNIQUE,
-     expires_at  timestamptz NOT NULL,
-     used_at     timestamptz,
-     created_at  timestamptz NOT NULL DEFAULT now()
-   );
-   CREATE INDEX ON password_reset_tokens (user_id);
-   ```
-2. **Email sender**
-   - Add a mailer module that wraps nodemailer SMTP or a provider SDK such as Postmark, SES or Resend.
-   - Read `MAIL_FROM` and `APP_URL` from config.
-3. **`POST /auth/password-reset/request`** with body `{ email }`
-   - Validate the email format.
-   - Always return `202` with the same body, whether or not the account exists.
-   - If the user exists:
-     - Generate the token with `crypto.randomBytes(32).toString('base64url')`.
-     - Store its hash with `expires_at = now() + 30 min`.
-     - Mark older unused tokens for that user as used.
-   - Send the email after the response is sent, or from a job queue, so response time does not reveal whether the account exists.
-   - Build the link from `APP_URL`, never from the `Host` header: `${APP_URL}/reset-password#token=...`.
-4. **`POST /auth/password-reset/confirm`** with body `{ token, newPassword }`
-   - Check the password against the same rules as signup.
-   - In one transaction:
-     - Run `SELECT ... WHERE token_hash = $1 AND used_at IS NULL AND expires_at > now() FOR UPDATE`.
-     - Update `users.password_hash`.
-     - Set `used_at`.
-     - Delete the user's other tokens.
-     - Revoke sessions (D4).
-   - If the token is invalid or expired, return a generic `400`.
-   - After a successful reset, send a "your password was changed" email.
-5. **Rate limiting**
-   - `request`: about 5 per IP per 15 minutes and 3 per email per hour.
-   - `confirm`: about 10 per IP per 15 minutes.
-6. **Reset page**
-   - Read the token from the URL fragment. The page must not use up the token when it loads.
-   - Set `Referrer-Policy: no-referrer`.
-7. **Cleanup**
-   - Run a daily job that deletes rows where `expires_at < now() - interval '1 day'`.
-8. **Tests**
-   - Unknown and known emails get identical responses.
-   - Expired, used and wrong tokens are rejected.
-   - A token cannot be used twice, even by concurrent requests.
-   - Old sessions are invalid after a reset.
-   - A new request cancels older tokens.
-   - Rate limits trigger.
 
-## Risks
-- **R1** Account enumeration through different responses or response times. Covered by step 3.
-- **R2** Email security scanners open links before the user does. If a GET used up the token, users would find their links already dead. Only the POST in step 4 uses it.
-- **R3** The token could leak through access logs, the `Referer` header or analytics scripts on the reset page. The URL fragment and `no-referrer` reduce this. Keep third-party scripts off that page.
-- **R4** An attacker who can set the `Host` header could get a reset link pointing at their own domain. Always build the link from `APP_URL`.
-- **R5** Without session revocation, an attacker already signed in stays signed in after the reset.
-- **R6** Email delivery can fail silently. Log failures from the provider and set up SPF, DKIM and DMARC for `MAIL_FROM`.
+1. **`POST /auth/forgot-password { email }`**
+   - Look up the user with a normalized email (`lower(trim(email))`). Match however signup stores emails, or some users will never find their account.
+   - If the user exists, generate `crypto.randomBytes(32)` and encode it base64url. Insert its hash with `expires_at = now() + interval '30 minutes'`, then email the link.
+   - Always return the same `202` body, whether or not the user exists. Otherwise the endpoint reveals which emails have accounts.
+   - Send the email after responding or through a queue. Otherwise the slower response for real users reveals which emails exist.
+2. **Email link**: `https://app.example.com/reset-password?token=...`
+   - The link must open a page with a form that POSTs the token. Never consume the token on GET, because email security scanners prefetch links and would use it up.
+   - Serve that page with `Referrer-Policy: no-referrer` so the token doesn't leak to third-party scripts or links.
+   - Build the base URL from config, never from the `Host` header. Otherwise an attacker can make you send reset links that point to their domain.
+3. **`POST /auth/reset-password { token, password }`**
+   - Hash the token and consume it in one statement so two concurrent requests can't both use it:
+     ```sql
+     UPDATE password_reset_tokens SET used_at = now()
+     WHERE token_hash = $1 AND used_at IS NULL AND expires_at > now()
+     RETURNING user_id;
+     ```
+   - If no row comes back, return one generic "invalid or expired link" error.
+   - Check the password against your signup rules and hash it with the same algorithm signup uses.
+4. **One transaction**: consume the token, update `users.password_hash` (and `password_changed_at`), and delete the user's other unused reset tokens.
+5. **Invalidate existing logins.** Otherwise someone who stole a session keeps it after the reset.
+   - Session store: delete the user's sessions.
+   - JWT: reject tokens whose `iat` is earlier than `password_changed_at`.
+6. **Send a "your password was changed" email** so the real owner notices a reset they didn't make.
+7. **Rate-limit `forgot-password`** per IP and per email (for example, 3 per email per hour). Without a limit, it can be used to flood someone's inbox and run up your email costs.
+8. **Clean up** expired and used tokens with a daily job, or delete them lazily on insert.
 
-## Questions
-- **Q1** Which email provider, and are SPF, DKIM and DMARC already set up for the sending domain?
-- **Q2** Does the app use sessions or JWTs? This decides how D4 is built.
-- **Q3** Is 30 minutes the right expiry, or does a policy set it?
+## Decisions to make
 
-Next: answer Q1 and Q2, then the plan can be matched to the actual code.
+| Code | Decision | Recommendation |
+|---|---|---|
+| D1 | Email provider | Use the transactional provider you already have. Otherwise use Postmark, SES or Resend through `nodemailer` or their SDK. Set up SPF and DKIM first, or reset emails land in spam. |
+| D2 | Token lifetime | 30 minutes |
+| D3 | Log the user in after reset | No. Send them to the login page. It's simpler, and a leaked link then can't be used to log in. |
+
+I haven't seen your code. This plan assumes signup already hashes passwords with bcrypt or argon2 and that you know whether logins use sessions or JWTs. Step 5 depends on that.
+
+Next: pick D1, because the email setup (domain verification, DNS) takes the longest to finish.
 ````
 
 ## plan-darkmode
@@ -2788,122 +2585,24 @@ Separately, the Canva, Gmail, Google Calendar and Google Drive connectors need t
 ### plan-darkmode on 1
 
 ````markdown
-Put a `data-theme` attribute on `<html>`, override the CSS variables under `[data-theme="dark"]`, save the choice in `localStorage`, and set the attribute from an inline script in `index.html` before React loads.
-
-## Assumptions
-- A1: I haven't seen the code. I have no file access in this session.
-- A2: This is a client-rendered SPA (Vite or CRA). If it's Next.js or another SSR setup, step 3 changes (see R2).
-- A3: The current variables live in `:root` and hold the light theme.
-
-## Decisions for you
-- D1: **Two or three states.** Light/dark only, or light/dark/system? I recommend three. With no saved choice, the app follows `prefers-color-scheme`.
-- D2: **Where the toggle goes.** Header or settings page.
+Set a `data-theme` attribute on `<html>` from an inline script before React loads, override the CSS variables under that attribute, and store the explicit choice in `localStorage`.
 
 ## Steps
-1. **CSS.** Add a `[data-theme="dark"]` block that redefines the same variable names with dark values. Add `color-scheme: light` to `:root` and `color-scheme: dark` to the dark block so scrollbars and form controls match.
-2. **Storage key.** Use `localStorage` key `theme` with the values `light`, `dark`, or nothing (nothing means follow the system).
-3. **Script to prevent the flash.** Add an inline `<script>` in `index.html` `<head>`, before the CSS and bundle. It reads `theme`, falls back to `matchMedia('(prefers-color-scheme: dark)')`, and sets `document.documentElement.dataset.theme`. Wrap it in `try/catch`.
-4. **`useTheme` hook.** It reads the current value on first render. `setTheme(value)` updates the attribute, writes `localStorage` (or removes the key for `system`), and updates state. There's no need for context unless more than one component reads the theme.
-5. **System changes.** While on `system`, listen for `change` events on the `matchMedia` query and update the attribute.
-6. **Toggle component.** A `<button>` with an `aria-label` that says what it switches to, or a 3-option segmented control if you choose three states in D1.
-7. **Sweep for hardcoded colors.** Search the CSS and JSX for hex, `rgb(`, and named colors that don't use variables. Anything found stays light in dark mode.
 
-## Risks
-- R1: **Flash of the light theme** on load if step 3 is skipped or runs after the bundle.
-- R2: **SSR hydration mismatch.** The server can't read `localStorage`. You'd need a cookie or `suppressHydrationWarning` on `<html>` (for example, `next-themes`).
-- R3: **Hardcoded colors** in SVGs, images, charts, and third-party components won't follow the variables.
-- R4: **`localStorage` can throw** in some privacy modes. The `try/catch` falls back to the system theme without saving.
-- R5: **Content Security Policy.** If the CSP blocks inline scripts, the step 3 script needs a nonce or hash.
+1. **Dark variable set.** Add overrides next to the existing `:root` block. `color-scheme` makes native scrollbars, form controls and autofill match the theme.
 
-## Testing
-- Reload in each state and confirm there's no flash (throttle the network in DevTools).
-- Change the OS theme while on `system`.
-- Check contrast of the dark values against WCAG AA.
-
-Next: decide D1.
-````
-
-### plan-darkmode on 2
-
-````markdown
-Put dark values under `[data-theme="dark"]` in CSS, set that attribute from an inline script in `index.html` before React loads, and save the user's choice in `localStorage`.
-
-## Assumptions
-- **A1** The app renders in the browser only (Vite or CRA). With Next.js or other SSR, the inline script goes in the root layout and `<html>` needs `suppressHydrationWarning`.
-- **A2** Every color already comes from a CSS variable. Hardcoded colors will stay light in dark mode.
-- **A3** I haven't seen the codebase. File names below are placeholders.
-
-## Steps
-1. **Dark palette.** In the global stylesheet, override only the color variables:
    ```css
-   :root { color-scheme: light; }
+   :root { color-scheme: light; /* existing vars */ }
    :root[data-theme="dark"] {
      color-scheme: dark;
      --bg: #121212;
      --text: #e6e6e6;
-     /* ...one override per color variable */
+     /* every color var from :root */
    }
    ```
-   `color-scheme` switches native scrollbars and form controls too.
-2. **Set the theme before first paint.** Add this to `<head>` in `index.html`, above the stylesheet:
-   ```html
-   <script>
-     try {
-       var t = localStorage.getItem('theme');
-       if (t !== 'light' && t !== 'dark') {
-         t = matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
-       }
-       document.documentElement.dataset.theme = t;
-     } catch (e) {}
-   </script>
-   ```
-   If you do this inside React instead, users with a saved dark theme see a white flash on every load.
-3. **`useTheme` hook.** Read the starting value from `document.documentElement.dataset.theme` so it matches the script. When the theme changes, update the attribute and call `localStorage.setItem('theme', t)` inside try/catch.
-4. **`ThemeToggle` component.** A `<button>` that calls `setTheme`. Give it `aria-pressed` or an `aria-label` that says which theme it switches to.
-5. **Check it by hand.**
-   - Reload with each saved value.
-   - Clear storage and change the OS theme.
-   - Look for a flash with CPU throttling on.
-   - Test in a private window.
 
-## Decisions
-- **D1** Two-state toggle (light/dark) that follows the OS theme until the user clicks it. I recommend this over a three-way light/dark/system control because it's simpler and covers most users. The catch is that after one click, the app stops following OS changes.
-- **D2** No syncing between open tabs. If you want it, add a `storage` event listener to the hook.
+2. **Inline script in `index.html` `<head>`, before the CSS and bundle.** Setting the theme inside React runs after first paint, so dark-mode users would see a white flash on every load.
 
-## Risks
-- **R1** Hardcoded colors won't switch: inline styles, SVG `fill`, images with white backgrounds and third-party component styles. Search for `#`, `rgb(` and `hsl(` outside the variable definitions.
-- **R2** A strict Content Security Policy will block the inline script. You'd need a hash or nonce for it.
-- **R3** If `localStorage` is blocked (some privacy settings, sandboxed iframes), the toggle still works but the choice won't be saved. The try/catch stops it from crashing.
-````
-
-### plan-darkmode on 3
-
-````markdown
-Set a `data-theme` attribute on `<html>`, override the CSS variables under `[data-theme="dark"]`, save the choice in `localStorage`, and apply it with an inline script before React loads.
-
-## Assumptions
-- **A1** The app is client-rendered (Vite or CRA). SSR changes D2 and R4.
-- **A2** Light-theme variables are defined on `:root`.
-- **A3** I did not inspect your code. This plan is generic.
-
-## Decisions
-- **D1** Use `data-theme` on `<html>` rather than state passed through props. CSS does the switching and React only flips one attribute.
-- **D2** Use `localStorage`. Switch to a cookie only if the server must render the correct theme.
-- **D3** With no saved choice, follow the OS `prefers-color-scheme`. Save only when the user clicks the toggle.
-
-## Steps
-1. **CSS.** Add dark overrides next to the existing variables:
-   ```css
-   :root { color-scheme: light; }
-   [data-theme="dark"] {
-     color-scheme: dark;
-     --bg: #121212;
-     --text: #e6e6e6;
-     /* override every color variable */
-   }
-   ```
-   `color-scheme` makes scrollbars and form controls match.
-2. **Inline script** in `index.html` `<head>`, before the bundle:
    ```html
    <script>
      (function () {
@@ -2916,37 +2615,126 @@ Set a `data-theme` attribute on `<html>`, override the CSS variables under `[dat
      })();
    </script>
    ```
-3. **Hook** `useTheme.js`:
-   ```js
-   import { useState, useCallback } from 'react';
 
+   The `try` is needed because `localStorage` throws when storage is blocked, and an uncaught error there would leave the page with no theme.
+
+3. **`useTheme` hook.** Read the initial value from the attribute, not from `localStorage`. The script already resolved it, and reading it again could disagree with what is on screen.
+
+   ```tsx
    export function useTheme() {
      const [theme, setTheme] = useState(
-       () => document.documentElement.dataset.theme || 'light'
+       () => document.documentElement.dataset.theme as 'light' | 'dark'
      );
-     const toggle = useCallback(() => {
-       setTheme((prev) => {
-         const next = prev === 'dark' ? 'light' : 'dark';
-         document.documentElement.dataset.theme = next;
-         try { localStorage.setItem('theme', next); } catch (e) {}
-         return next;
-       });
-     }, []);
+     const toggle = () => {
+       const next = theme === 'dark' ? 'light' : 'dark';
+       document.documentElement.dataset.theme = next;
+       try { localStorage.setItem('theme', next); } catch {}
+       setTheme(next);
+     };
      return { theme, toggle };
    }
    ```
-   Wrap it in a context only if more than one component needs to read the theme.
-4. **Toggle component:**
-   ```jsx
-   const { theme, toggle } = useTheme();
-   <button onClick={toggle} aria-pressed={theme === 'dark'}>Dark mode</button>
+
+   A plain hook is enough for one toggle. Move it to a context only if several components need to read the theme.
+
+4. **Toggle button.** Use a `<button>` with `aria-pressed={theme === 'dark'}` and a text label. An icon alone gives screen readers nothing to announce.
+
+5. **Tests.** Cover three cases: the toggle flips the attribute and writes storage, a stored value wins over the OS setting, and the OS setting applies when nothing is stored.
+
+## Decisions and risks
+
+- **D1: Default follows the OS until the user clicks.** Only an explicit choice is saved, so users who never click keep tracking their OS setting. If you want a visible "System" option, make it a 3-state control and remove the key when it is picked.
+- **R1: SSR (Next.js, Remix).** `document` does not exist on the server, and the button icon will cause a hydration mismatch. Put `suppressHydrationWarning` on `<html>` and render the icon only after mount. This does not apply to a Vite or CRA SPA.
+- **R2: Colors outside your variables.** Hardcoded hex values, inline SVG fills, images with white backgrounds and third-party component styles will stay light. Grep for hex and `rgb(` values and check third-party components before shipping.
+- **R3: Strict CSP.** If your Content Security Policy blocks inline scripts, the script in step 2 needs a nonce or hash.
+
+Next: confirm whether the app is SPA or SSR, since R1 changes steps 2 and 3.
+````
+
+### plan-darkmode on 2
+
+````markdown
+Set a `data-theme` attribute on `<html>`, override the CSS variables under it, save the choice in `localStorage`, and apply it with an inline script before React loads so the page never flashes the wrong theme.
+
+## Steps
+
+1. **Dark variable set.** Add overrides next to the existing variables, plus `color-scheme` so native scrollbars, form controls and autofill follow the theme.
+   ```css
+   :root { color-scheme: light; --bg: #fff; --text: #111; }
+   :root[data-theme="dark"] { color-scheme: dark; --bg: #121212; --text: #eee; }
    ```
-5. **Audit** for colors that bypass the variables (R3).
+
+2. **Inline script in `index.html` `<head>`, before any stylesheet or bundle.** React runs after first paint, so setting the theme from a `useEffect` shows a white flash on every dark-mode load.
+   ```html
+   <script>
+     (function () {
+       var t;
+       try { t = localStorage.getItem('theme'); } catch (e) {}
+       if (t !== 'light' && t !== 'dark') {
+         t = matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+       }
+       document.documentElement.dataset.theme = t;
+     })();
+   </script>
+   ```
+   The `try` is needed because `localStorage` throws when storage is blocked, and an uncaught error here would leave the page unthemed.
+
+3. **`useTheme` hook.** Read the initial value from `document.documentElement.dataset.theme`, not from `localStorage`, so React and the inline script cannot disagree. On toggle, set the attribute and write `localStorage` inside a `try`.
+
+4. **Toggle button.** A `<button>` with `aria-pressed={theme === 'dark'}` and a text or `aria-label` that names the action. Put it wherever the header lives. A context provider is only needed if more than one component reads the theme.
+
+5. **Test.** Reload in dark mode with cache disabled and throttled CPU to confirm no flash. Clear storage to confirm the OS setting is used. Block site storage to confirm the toggle still works for the session.
+
+## Decisions
+
+- **OS preference only until the user toggles.** Once they pick, the saved value wins. This avoids a three-way light/dark/system control. The downside is that a user who toggled once no longer follows OS changes. Add a "system" option only if someone asks for it.
+- **Attribute on `<html>`, not a class on a React root.** The inline script can set it before React mounts, and portals and modals rendered outside the root inherit it.
 
 ## Risks
-- **R1** Setting the theme in `useEffect` instead of the inline script causes a flash of the light theme on load.
-- **R2** `localStorage` can throw when storage is blocked. The `try/catch` blocks cover this.
-- **R3** Hardcoded hex values, inline styles, SVG fills, images, and third-party component styles will not switch.
-- **R4** With SSR (such as Next.js), the server does not know the theme. That causes a hydration mismatch unless you inject the script in the document head and add `suppressHydrationWarning` on `<html>`, or read a cookie on the server.
-- **R5** A strict Content Security Policy blocks the inline script. Add a nonce or hash for it.
+
+- Colors not routed through variables do not switch: inline `style` props, hardcoded hex in CSS, SVGs with fixed `fill`, images with white backgrounds, and third-party components. Grep for hex and `rgb(` values before calling it done.
+- If the app uses SSR (Next.js, Remix), the server renders without the attribute. Put the script in the document head the same way and add `suppressHydrationWarning` on `<html>`, or React logs a mismatch.
+- A strict Content Security Policy blocks the inline script. It then needs a nonce or hash.
+
+Next: confirm whether the app is client-only (Vite/CRA) or SSR, since step 2 goes in a different file for each.
+````
+
+### plan-darkmode on 3
+
+````markdown
+Put the theme on `<html>` as a `data-theme` attribute, set it with an inline script before React loads, and save the user's choice in `localStorage`.
+
+## Steps
+
+1. **CSS.** Keep the current variables under `:root` as the light theme. Add a dark override block. Also set `color-scheme` so form controls and scrollbars switch too.
+   ```css
+   :root { color-scheme: light; /* existing vars */ }
+   :root[data-theme="dark"] { color-scheme: dark; --bg: #121212; --fg: #e6e6e6; /* ... */ }
+   ```
+2. **Inline script in `index.html` `<head>`**, before the stylesheet and the bundle. A `useEffect` runs after the first paint, so dark-mode users would see a white flash on every load.
+   ```html
+   <script>
+     (function () {
+       var t;
+       try { t = localStorage.getItem('theme'); } catch (e) {}
+       if (t !== 'light' && t !== 'dark') {
+         t = matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+       }
+       document.documentElement.dataset.theme = t;
+     })();
+   </script>
+   ```
+   The `try` is there because `localStorage` throws when storage is blocked. Without it the page gets no theme at all.
+3. **`useTheme` hook or context.** Start the state from `document.documentElement.dataset.theme`, not from `localStorage`, so React matches what the script already applied. The setter updates the attribute and writes to `localStorage`, also inside `try`. Use context only if something besides the toggle needs the theme, such as charts or a code highlighter that take colors as JS values.
+4. **Toggle component.** Use a `<button>` with `aria-pressed` or an `aria-label` that names the theme it switches to.
+5. **Find colors that bypass the variables.** Search for hex, `rgb(` and named colors in inline styles, CSS-in-JS, SVG `fill`, and third-party component themes. None of these will switch on their own.
+
+## Decisions
+
+- **D1: No saved choice means follow the OS.** Only save a value when the user clicks the toggle. The downside of a two-state toggle is that after one click the user can't go back to following the OS. If that matters, use a light/dark/system control and delete the key when they pick system.
+- **D2: SSR.** This plan assumes a client-only app like Vite or CRA. On Next.js or Remix the server can't read `localStorage`, so the toggle icon will cause a hydration mismatch. Use `next-themes` there, or add `suppressHydrationWarning` on `<html>` and render the icon only after mount.
+
+## Test
+
+Reload with dark saved and check for a flash. Clear storage with the OS in dark mode and check the page follows it. Block site storage in the browser and check the page still loads with a theme.
 ````

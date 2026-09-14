@@ -7,7 +7,8 @@
 //   node eval/split.mjs <label>                 runs the prompts with this repo as the plugin
 //   node eval/split.mjs <label> --replies <dir> scores replies already saved as <prompt>-<n>.md
 //
-// Env: REPS (default 6), CONCURRENCY (default 6), PLUGIN_DIR (default: this repo).
+// Env: REPS (default 6), CONCURRENCY (default 6), PLUGIN_DIR (default: this repo),
+// MODEL (default claude-opus-5[1m]).
 // Writes eval/runs/<label>/split/<prompt>-<n>.md and eval/results/<label>/split.md.
 // Isolation is the same as eval/run.mjs.
 
@@ -31,6 +32,7 @@ const outDir = join(here, "results", label);
 const REPS = Number(process.env.REPS ?? 6);
 const CONCURRENCY = Number(process.env.CONCURRENCY ?? 6);
 const pluginDir = process.env.PLUGIN_DIR ?? repo;
+const MODEL = process.env.MODEL ?? "claude-opus-5[1m]";
 const prompts = JSON.parse(readFileSync(join(here, "split-prompts.json"), "utf8"));
 
 if (repliesAt === -1) {
@@ -43,7 +45,7 @@ if (repliesAt === -1) {
   console.log(`${queue.length} runs to do in ${runDir}`);
   const run = ({ p, rep }) =>
     new Promise((resolve) => {
-      const child = spawn(bin, ["-p", "--tools", "", "--setting-sources", "", "--output-format", "json", "--no-session-persistence", "--plugin-dir", pluginDir], { cwd, stdio: ["pipe", "pipe", "pipe"] });
+      const child = spawn(bin, ["-p", "--model", MODEL, "--tools", "", "--setting-sources", "", "--output-format", "json", "--no-session-persistence", "--plugin-dir", pluginDir], { cwd, stdio: ["pipe", "pipe", "pipe"] });
       let out = "";
       let err = "";
       child.stdout.on("data", (d) => (out += d));

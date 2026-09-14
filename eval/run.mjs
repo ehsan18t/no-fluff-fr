@@ -3,7 +3,8 @@
 //
 //   node eval/run.mjs <label>        writes eval/runs/<label>/<prompt>-<off|on>-<n>.json
 //
-// Env: REPS (default 3), CONCURRENCY (default 6). Reruns skip replies already saved.
+// Env: REPS (default 3), CONCURRENCY (default 6), MODEL (default claude-opus-5[1m]; both arms
+// must use the same model). Reruns skip replies already saved.
 //
 // Isolation: --setting-sources "" keeps user and project settings (so other installed
 // plugins and their hooks) out of both arms, --tools "" makes every reply plain text,
@@ -21,6 +22,7 @@ const repo = join(here, "..");
 const label = process.argv[2] ?? "baseline";
 const REPS = Number(process.env.REPS ?? 3);
 const CONCURRENCY = Number(process.env.CONCURRENCY ?? 6);
+const MODEL = process.env.MODEL ?? "claude-opus-5[1m]";
 const outDir = join(here, "runs", label);
 mkdirSync(outDir, { recursive: true });
 const cwd = mkdtempSync(join(tmpdir(), "nsb-eval-"));
@@ -38,7 +40,7 @@ for (const p of prompts) {
 }
 
 function run({ id, p, cond, rep }) {
-  const args = ["-p", "--tools", "", "--setting-sources", "", "--output-format", "json", "--no-session-persistence"];
+  const args = ["-p", "--model", MODEL, "--tools", "", "--setting-sources", "", "--output-format", "json", "--no-session-persistence"];
   if (cond === "on") args.push("--plugin-dir", repo);
   return new Promise((resolve) => {
     const child = spawn(bin, args, { cwd, stdio: ["pipe", "pipe", "pipe"] });
