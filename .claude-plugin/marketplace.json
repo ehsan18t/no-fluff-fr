@@ -1,7 +1,7 @@
 {
   "$schema": "https://www.schemastore.org/claude-code-marketplace.json",
   "name": "no-smartass-bs",
-  "description": "Output rules for Claude Code: answer first, bullets over paragraphs, every risk kept.",
+  "description": "Output rules for Claude Code: answer first, bullets over paragraphs, only lines that change what the reader does.",
   "owner": {
     "name": "Ehsan Khan",
     "url": "https://github.com/ehsan18t"
