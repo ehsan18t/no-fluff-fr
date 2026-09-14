@@ -1,0 +1,52 @@
+[
+  {
+    "id": "explain-index",
+    "kind": "explain",
+    "prompt": "Explain what a database index is and when adding one makes performance worse."
+  },
+  {
+    "id": "explain-thread",
+    "kind": "explain",
+    "prompt": "What is the difference between a process and a thread, and when should I pick one over the other?"
+  },
+  {
+    "id": "debug-foreach",
+    "kind": "debug",
+    "prompt": "Why does saveAll log \"saved\" before the files are written?\n\n```js\nasync function saveAll(items) {\n  items.forEach(async (item) => {\n    await fs.promises.writeFile(`out/${item.id}.json`, JSON.stringify(item));\n  });\n  console.log(\"saved\");\n}\n```"
+  },
+  {
+    "id": "debug-default-arg",
+    "kind": "debug",
+    "prompt": "This function keeps returning tags from earlier calls. Why, and how do I fix it?\n\n```python\ndef add_tag(tag, tags=[]):\n    tags.append(tag)\n    return tags\n```"
+  },
+  {
+    "id": "debug-docker",
+    "kind": "debug",
+    "prompt": "My container exits right after `docker run -d myimage`. The Dockerfile is based on ubuntu:24.04, installs nginx, and ends with `CMD service nginx start`. What is wrong?"
+  },
+  {
+    "id": "compare-db",
+    "kind": "compare",
+    "prompt": "Should I use PostgreSQL or MongoDB for a new web app that stores users, orders and invoices?"
+  },
+  {
+    "id": "compare-rpc",
+    "kind": "compare",
+    "prompt": "REST or gRPC for internal service-to-service calls? We are a team of five running eight services on Kubernetes."
+  },
+  {
+    "id": "summarize-retry",
+    "kind": "summarize",
+    "prompt": "Summarize this change for a reviewer.\n\n```diff\ndiff --git a/src/http.js b/src/http.js\n@@ -1,5 +1,18 @@\n-export async function request(url, options = {}) {\n-  const res = await fetch(url, { ...options, signal: AbortSignal.timeout(10000) });\n-  if (!res.ok) throw new Error(`HTTP ${res.status}`);\n-  return res.json();\n-}\n+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));\n+\n+export async function request(url, options = {}, retries = 3) {\n+  for (let attempt = 0; ; attempt++) {\n+    try {\n+      const res = await fetch(url, { ...options, signal: AbortSignal.timeout(30000) });\n+      if (res.status >= 500 && attempt < retries) {\n+        await sleep(2 ** attempt * 500);\n+        continue;\n+      }\n+      if (!res.ok) throw new Error(`HTTP ${res.status}`);\n+      return res.json();\n+    } catch (err) {\n+      if (attempt >= retries) throw err;\n+      await sleep(2 ** attempt * 500);\n+    }\n+  }\n+}\n```"
+  },
+  {
+    "id": "plan-reset",
+    "kind": "plan",
+    "prompt": "Plan adding password reset by email to an Express app whose users live in a Postgres users table."
+  },
+  {
+    "id": "plan-darkmode",
+    "kind": "plan",
+    "prompt": "Plan adding a dark mode toggle to a React app that already styles everything with CSS variables. The choice should persist across visits."
+  }
+]
