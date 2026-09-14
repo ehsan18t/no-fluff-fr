@@ -2,35 +2,58 @@
 
 A Claude Code plugin that makes every reply short, skimmable and easy to act on. It injects a set of output rules into context at the start of every session and a one-line reminder on every prompt, so Claude writes the reply that way the first time. No skill to load, no second pass, no runtime, no setup.
 
-## Install
+## Install and manage
 
+The commands below run in a terminal. The VS Code extension does not put `claude` on your PATH, so in the extension type `/plugins` in the prompt box instead: add the `ehsan18t/no-smartass-bs` marketplace there, then install, enable or disable the plugin.
+
+### Install
+
+```bash
+claude plugin marketplace add ehsan18t/no-smartass-bs
+claude plugin install no-smartass-bs
 ```
-/plugin marketplace add ehsan18t/no-smartass-bs
-/plugin install no-smartass-bs@no-smartass-bs
-```
+
+Inside a Claude Code session: `/plugin marketplace add ehsan18t/no-smartass-bs`, then `/plugin install no-smartass-bs`.
 
 Restart Claude Code after installing. Installing is the only step: there are no settings and nothing else to run.
 
 To try it without installing, start a session with the plugin loaded from a local clone:
 
-```
+```bash
 claude --plugin-dir /path/to/no-smartass-bs
 ```
 
-## Turn it off
+### Update
 
-```
-/plugin disable no-smartass-bs
+```bash
+claude plugin marketplace update no-smartass-bs
+claude plugin update no-smartass-bs
 ```
 
-Or from a terminal: `claude plugin disable no-smartass-bs`. There are no per-project settings; the plugin is either enabled or disabled.
+The first command fetches the latest version from GitHub, because third-party marketplaces do not update on their own by default. Restart Claude Code to apply the update.
+
+### Uninstall
+
+```bash
+claude plugin uninstall no-smartass-bs
+```
+
+Inside a Claude Code session: `/plugin uninstall no-smartass-bs`.
+
+### Disable
+
+```bash
+claude plugin disable no-smartass-bs
+```
+
+Inside a Claude Code session: `/plugin disable no-smartass-bs`.
 
 ## What it does
 
-| Hook | When | Injects |
-|---|---|---|
-| `SessionStart` | every source: startup, resume, clear, compact, fork | [inject/session-start.md](inject/session-start.md), the full output rules |
-| `UserPromptSubmit` | every prompt | [inject/every-prompt.md](inject/every-prompt.md), one sentence restating the core rules |
+| Hook               | When                                                | Injects                                                                                 |
+| ------------------ | --------------------------------------------------- | --------------------------------------------------------------------------------------- |
+| `SessionStart`     | every source: startup, resume, clear, compact, fork | [inject/session-start.md](inject/session-start.md), the full output rules               |
+| `UserPromptSubmit` | every prompt                                        | [inject/every-prompt.md](inject/every-prompt.md), one sentence restating the core rules |
 
 The rules come back after `/compact` and `/clear`, which drop or reset earlier context. The reminder keeps them from fading in long sessions.
 
@@ -40,13 +63,13 @@ Both hooks run `cat` on a file in the plugin directory. There is no Node or othe
 
 No runtime. Claude Code (CLI or VS Code extension) is the only requirement.
 
-| Setup | Status |
-|---|---|
-| Windows with Git for Windows, CLI | Verified: new session, resume, fork, clear, compact, reminder on every prompt, Node absent from PATH |
+| Setup                                   | Status                                                                                                                                                                                                    |
+| --------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Windows with Git for Windows, CLI       | Verified: new session, resume, fork, clear, compact, reminder on every prompt, Node absent from PATH                                                                                                      |
 | Windows with the hook run by PowerShell | Verified that the same `cat` command works when a hook runs under PowerShell 7 (Claude Code rewrites `${CLAUDE_PLUGIN_ROOT}` for PowerShell). Not verified on a machine with no Git for Windows installed |
-| macOS, CLI | Not verified, expected to work (`cat` is built in) |
-| Linux, CLI | Not verified, expected to work |
-| VS Code extension, any OS | Not verified. Hooks run the same way as in the CLI |
+| macOS, CLI                              | Not verified, expected to work (`cat` is built in)                                                                                                                                                        |
+| Linux, CLI                              | Not verified, expected to work                                                                                                                                                                            |
+| VS Code extension, any OS               | Not verified. Hooks run the same way as in the CLI                                                                                                                                                        |
 
 If the rules seem missing on your setup, run `claude --debug` and look for the `SessionStart` hook result, or open `/hooks`.
 
@@ -76,12 +99,12 @@ Results are written to `eval/results/<label>/`. Each run of the full set costs r
 
 Results so far (Opus 5, 3 runs per prompt per arm, the same 30 plugin-off replies for both labels):
 
-| | Plugin off | On, [baseline](eval/results/baseline/) rules | On, [tuned](eval/results/tuned/) rules (shipped) |
-|---|---|---|---|
-| Median words per reply | 398 | 309 (-22%) | 338 (-15%) |
-| Replies with a prose paragraph | 25/30 | 3/30 | 6/30 |
-| Line one answers the question | 15/30 | 29/30 | 28/30 |
-| Caveats dropped compared with the off reply | | 20 | 12 |
+|                                             | Plugin off | On, [baseline](eval/results/baseline/) rules | On, [tuned](eval/results/tuned/) rules (shipped) |
+| ------------------------------------------- | ---------- | -------------------------------------------- | ------------------------------------------------ |
+| Median words per reply                      | 398        | 309 (-22%)                                   | 338 (-15%)                                       |
+| Replies with a prose paragraph              | 25/30      | 3/30                                         | 6/30                                             |
+| Line one answers the question               | 15/30      | 29/30                                        | 28/30                                            |
+| Caveats dropped compared with the off reply |            | 20                                           | 12                                               |
 
 The goal of zero dropped caveats is not met yet. Remaining drops sit in long lists of failure cases and security checks. Each off/on pair is a single sample, so part of the difference is run-to-run variation.
 
