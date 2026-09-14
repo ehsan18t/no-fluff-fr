@@ -10,6 +10,13 @@ Version: patch for fixes to released behavior, minor for anything added, removed
 Never rewrite a released entry, correct it in the next one. No em dashes, no hard wraps.
 -->
 
+## 0.2.1 - 2026-09-15
+
+### Fixed
+
+- After a task, the reply is what changed and where, then only the calls you did not ask for, anything that failed or was not run, and risks that change the plan: no check narration, no pasted content, no repeated request, no notes of its own, no command you said you would run.
+- A single finding is split less often into separate bullets for its evidence and its consequence.
+
 ## 0.2.0 - 2026-09-14
 
 ### Changed
