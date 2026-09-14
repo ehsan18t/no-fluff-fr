@@ -20,18 +20,27 @@ const runs = readdirSync(runDir).filter((f) => f.endsWith(".json")).map((f) => J
 const prompts = JSON.parse(readFileSync(join(here, "prompts.json"), "utf8"));
 
 const stripCode = (text) => text.replace(/```[\s\S]*?(```|$)/g, "");
-const words = (text) => stripCode(text).split(/\s+/).filter(Boolean).length;
+// Tokens with no letter or digit (list bullets, table pipes, heading hashes) are not words.
+const wordList = (text) => text.split(/\s+/).filter((t) => /[\p{L}\p{N}]/u.test(t));
+const words = (text) => wordList(stripCode(text)).length;
 
-// A paragraph is a blank-line-separated block after line one, with no list, table,
-// heading or quote lines, holding more than 25 words.
+// A paragraph is a run of consecutive lines after line one that are not blank and
+// not list, table, heading or quote lines, holding more than 25 words.
+const STRUCTURE = /^\s*([-*+]\s|\d+[.)]\s|\||#|>)/;
 function paragraphs(text) {
   const lines = stripCode(text).split(/\r?\n/);
   const first = lines.findIndex((l) => l.trim());
-  const blocks = lines.slice(first + 1).join("\n").split(/\n\s*\n/);
-  return blocks.filter((b) => {
-    const ls = b.split("\n").filter((l) => l.trim());
-    return ls.length && ls.every((l) => !/^\s*([-*+]\s|\d+[.)]\s|\||#|>)/.test(l)) && b.split(/\s+/).filter(Boolean).length > 25;
-  }).length;
+  let count = 0;
+  let run = [];
+  for (const line of [...lines.slice(first + 1), ""]) {
+    if (line.trim() && !STRUCTURE.test(line)) {
+      run.push(line);
+      continue;
+    }
+    if (wordList(run.join(" ")).length > 25) count++;
+    run = [];
+  }
+  return count;
 }
 
 function median(xs) {
