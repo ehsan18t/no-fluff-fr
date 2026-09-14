@@ -29,12 +29,12 @@ Or from a terminal: `claude plugin disable no-smartass-bs`. There are no per-pro
 
 | Hook | When | Injects |
 |---|---|---|
-| `SessionStart` | every source: startup, resume, clear, compact, fork | [rules.md](rules.md), the full output rules |
-| `UserPromptSubmit` | every prompt | [reminder.md](reminder.md), one sentence restating the core rules |
+| `SessionStart` | every source: startup, resume, clear, compact, fork | [inject/session-start.md](inject/session-start.md), the full output rules |
+| `UserPromptSubmit` | every prompt | [inject/every-prompt.md](inject/every-prompt.md), one sentence restating the core rules |
 
 The rules come back after `/compact` and `/clear`, which drop or reset earlier context. The reminder keeps them from fading in long sessions.
 
-Both hooks run `cat` on a file in the plugin directory. There is no Node or other runtime, and a failing hook never blocks the session: if `rules.md` is missing, the session starts and answers normally without the rules.
+Both hooks run `cat` on a file in the plugin directory. There is no Node or other runtime, and a failing hook never blocks the session: if `inject/session-start.md` is missing, the session starts and answers normally without the rules.
 
 ## Requirements and platform status
 
@@ -52,8 +52,8 @@ If the rules seem missing on your setup, run `claude --debug` and look for the `
 
 ## Editing the rules
 
-- `rules.md` must stay under 8,000 bytes. Claude Code cuts a single hook's output above roughly 10 KB down to a short preview, so a larger file would arrive incomplete without any error.
-- `reminder.md` must stay under 500 bytes, because it is paid for on every prompt.
+- `inject/session-start.md` must stay under 8,000 bytes. Claude Code cuts a single hook's output above roughly 10 KB down to a short preview, so a larger file would arrive incomplete without any error.
+- `inject/every-prompt.md` must stay under 500 bytes, because it is paid for on every prompt.
 - Both files must be ASCII only, so Windows PowerShell cannot mis-decode them.
 
 The gate checks all of this, plus that the manifests and `hooks/hooks.json` parse and every file the hooks reference exists. It runs in CI on every push:

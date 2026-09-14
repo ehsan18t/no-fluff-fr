@@ -3,9 +3,9 @@
 //   node scripts/check.mjs [plugin-root]
 //
 // Fails (exit 1) when:
-// - rules.md exceeds 8,000 bytes. The harness cuts one hook's output above roughly
-//   10 KB to a short preview, so the rules would silently arrive incomplete.
-// - reminder.md exceeds 500 bytes. It is paid for on every prompt.
+// - inject/session-start.md exceeds 8,000 bytes. The harness cuts one hook's output
+//   above roughly 10 KB to a short preview, so the rules would silently arrive incomplete.
+// - inject/every-prompt.md exceeds 500 bytes. It is paid for on every prompt.
 // - either file has a non-ASCII byte, which Windows PowerShell can mis-decode.
 // - hooks.json, plugin.json or marketplace.json does not parse.
 // - a file referenced as ${CLAUDE_PLUGIN_ROOT}/<path> in hooks.json does not exist.
@@ -15,7 +15,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const root = resolve(process.argv[2] ?? join(dirname(fileURLToPath(import.meta.url)), ".."));
-const LIMITS = { "rules.md": 8000, "reminder.md": 500 };
+const LIMITS = { "inject/session-start.md": 8000, "inject/every-prompt.md": 500 };
 const errors = [];
 
 for (const [name, limit] of Object.entries(LIMITS)) {

@@ -11,7 +11,9 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const repo = join(dirname(fileURLToPath(import.meta.url)), "..");
-const SHIPPED = [".claude-plugin", "hooks", "rules.md", "reminder.md"];
+const SHIPPED = [".claude-plugin", "hooks", "inject"];
+const SESSION_START = join("inject", "session-start.md");
+const EVERY_PROMPT = join("inject", "every-prompt.md");
 
 function fixture(mutate) {
   const dir = mkdtempSync(join(tmpdir(), "nsb-check-"));
@@ -31,33 +33,33 @@ test("passes on the shipped files", () => {
   assert.equal(r.code, 0, r.out);
 });
 
-test("passes on a rules.md of exactly 8,000 bytes", () => {
-  const r = check(fixture((d) => writeFileSync(join(d, "rules.md"), "a".repeat(8000))));
+test("passes on a session-start.md of exactly 8,000 bytes", () => {
+  const r = check(fixture((d) => writeFileSync(join(d, SESSION_START), "a".repeat(8000))));
   assert.equal(r.code, 0, r.out);
 });
 
-test("fails on a rules.md of 8,001 bytes", () => {
-  const r = check(fixture((d) => writeFileSync(join(d, "rules.md"), "a".repeat(8001))));
+test("fails on a session-start.md of 8,001 bytes", () => {
+  const r = check(fixture((d) => writeFileSync(join(d, SESSION_START), "a".repeat(8001))));
   assert.equal(r.code, 1);
-  assert.match(r.out, /rules\.md.*8001/);
+  assert.match(r.out, /session-start\.md.*8001/);
 });
 
-test("fails on a reminder.md of 501 bytes", () => {
-  const r = check(fixture((d) => writeFileSync(join(d, "reminder.md"), "a".repeat(501))));
+test("fails on an every-prompt.md of 501 bytes", () => {
+  const r = check(fixture((d) => writeFileSync(join(d, EVERY_PROMPT), "a".repeat(501))));
   assert.equal(r.code, 1);
-  assert.match(r.out, /reminder\.md.*501/);
+  assert.match(r.out, /every-prompt\.md.*501/);
 });
 
 test("fails on a non-ASCII byte and names the line", () => {
-  const r = check(fixture((d) => writeFileSync(join(d, "rules.md"), "ok\nan em dash " + String.fromCharCode(0x2014) + " here\n")));
+  const r = check(fixture((d) => writeFileSync(join(d, SESSION_START), "ok\nan em dash " + String.fromCharCode(0x2014) + " here\n")));
   assert.equal(r.code, 1);
-  assert.match(r.out, /rules\.md.*non-ASCII.*line 2/);
+  assert.match(r.out, /session-start\.md.*non-ASCII.*line 2/);
 });
 
 test("fails when a file the hooks reference is missing", () => {
-  const r = check(fixture((d) => rmSync(join(d, "reminder.md"))));
+  const r = check(fixture((d) => rmSync(join(d, EVERY_PROMPT))));
   assert.equal(r.code, 1);
-  assert.match(r.out, /reminder\.md.*(missing|does not exist)/);
+  assert.match(r.out, /every-prompt\.md.*(missing|does not exist)/);
 });
 
 test("fails when hooks.json does not parse", () => {

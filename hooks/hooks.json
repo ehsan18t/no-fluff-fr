@@ -2,10 +2,10 @@
   "description": "Injects the no-smartass-bs output rules at every session start (startup, resume, clear, compact, fork) and a one-line reminder on every prompt.",
   "hooks": {
     "SessionStart": [
-      { "hooks": [ { "type": "command", "command": "cat \"${CLAUDE_PLUGIN_ROOT}/rules.md\"", "timeout": 5 } ] }
+      { "hooks": [ { "type": "command", "command": "cat \"${CLAUDE_PLUGIN_ROOT}/inject/session-start.md\"", "timeout": 5 } ] }
     ],
     "UserPromptSubmit": [
-      { "hooks": [ { "type": "command", "command": "cat \"${CLAUDE_PLUGIN_ROOT}/reminder.md\"", "timeout": 5 } ] }
+      { "hooks": [ { "type": "command", "command": "cat \"${CLAUDE_PLUGIN_ROOT}/inject/every-prompt.md\"", "timeout": 5 } ] }
     ]
   }
 }
