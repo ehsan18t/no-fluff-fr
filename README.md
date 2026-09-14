@@ -72,7 +72,18 @@ node eval/run.mjs <label>
 node eval/score.mjs <label>
 ```
 
-Results are written to `eval/results/<label>/`. Each run of the full set costs real usage on your account.
+Results are written to `eval/results/<label>/`. Each run of the full set costs real usage on your account. A reader, not the script, judges whether line one answers the question and whether any caveat was dropped; those judgments are in `judgment.md` next to the metrics.
+
+Results so far (Opus 5, 3 runs per prompt per arm, the same 30 plugin-off replies for both labels):
+
+| | Plugin off | On, [baseline](eval/results/baseline/) rules | On, [tuned](eval/results/tuned/) rules (shipped) |
+|---|---|---|---|
+| Median words per reply | 398 | 309 (-22%) | 338 (-15%) |
+| Replies with a prose paragraph | 25/30 | 3/30 | 6/30 |
+| Line one answers the question | 15/30 | 29/30 | 28/30 |
+| Caveats dropped compared with the off reply | | 20 | 12 |
+
+The goal of zero dropped caveats is not met yet. Remaining drops sit in long lists of failure cases and security checks. Each off/on pair is a single sample, so part of the difference is run-to-run variation.
 
 ## Known limits
 
