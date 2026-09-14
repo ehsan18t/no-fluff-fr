@@ -49,7 +49,7 @@ test("fails on a reminder.md of 501 bytes", () => {
 });
 
 test("fails on a non-ASCII byte and names the line", () => {
-  const r = check(fixture((d) => writeFileSync(join(d, "rules.md"), "ok\nan em dash — here\n")));
+  const r = check(fixture((d) => writeFileSync(join(d, "rules.md"), "ok\nan em dash " + String.fromCharCode(0x2014) + " here\n")));
   assert.equal(r.code, 1);
   assert.match(r.out, /rules\.md.*non-ASCII.*line 2/);
 });
