@@ -87,25 +87,49 @@ node --test scripts/check.test.mjs
 
 ## Measuring the effect
 
-`eval/` runs 10 fixed prompts (explain, debug, compare, summarize, plan) several times with the plugin off and on, each in a fresh headless session isolated from your own settings and other plugins, then scores the replies:
+Every measurement runs in fresh headless sessions isolated from your own settings and other plugins (`--setting-sources ""`, no tools, a temporary working directory), so the plugin is the only difference between the arms. Each run costs real usage on your account. Results go to `eval/results/<label>/`, one label per version of the rules: `baseline`, `tuned`, `one-point`, `0.2.0`.
+
+### Length, structure and dropped caveats
+
+`eval/run.mjs` runs 10 fixed prompts (explain, debug, compare, summarize, plan) several times with the plugin off and on, and `eval/score.mjs` counts words and prose paragraphs:
 
 ```
 node eval/run.mjs <label>
 node eval/score.mjs <label>
 ```
 
-Results are written to `eval/results/<label>/`. Each run of the full set costs real usage on your account. A reader, not the script, judges whether line one answers the question and whether any caveat was dropped; those judgments are in `judgment.md` next to the metrics.
+A reader, not the script, judges whether line one answers the question and whether any caveat was dropped. Those judgments are in `judgment.md` next to `metrics.md`.
 
-Results so far (Opus 5, 3 runs per prompt per arm, the same 30 plugin-off replies for both labels):
+Opus 5, 3 runs per prompt per arm, the same 30 plugin-off replies for both labels:
 
-|                                             | Plugin off | On, [baseline](eval/results/baseline/) rules | On, [tuned](eval/results/tuned/) rules (shipped) |
-| ------------------------------------------- | ---------- | -------------------------------------------- | ------------------------------------------------ |
-| Median words per reply                      | 398        | 309 (-22%)                                   | 338 (-15%)                                       |
-| Replies with a prose paragraph              | 25/30      | 3/30                                         | 6/30                                             |
-| Line one answers the question               | 15/30      | 29/30                                        | 28/30                                            |
-| Caveats dropped compared with the off reply |            | 20                                           | 12                                               |
+| | Plugin off | On, [baseline](eval/results/baseline/) rules | On, [tuned](eval/results/tuned/) rules |
+|---|---|---|---|
+| Median words per reply | 398 | 309 (-22%) | 338 (-15%) |
+| Replies with a prose paragraph | 25/30 | 3/30 | 6/30 |
+| Line one answers the question | 15/30 | 29/30 | 28/30 |
+| Caveats dropped compared with the off reply | | 20 | 12 |
 
-The goal of zero dropped caveats is not met yet. Remaining drops sit in long lists of failure cases and security checks. Each off/on pair is a single sample, so part of the difference is run-to-run variation.
+Remaining drops sit in long lists of failure cases and security checks. Each off/on pair is a single sample, so part of the difference is run-to-run variation. The 0.2.0 rules have not been measured on this set.
+
+### One finding, one point
+
+`eval/split.mjs` runs two prompts that each report a single finding and counts the replies that break it into a heading or into separate bullets for its evidence, impact and question:
+
+```
+node eval/split.mjs <label>
+```
+
+| Rules | Replies that split the one finding |
+|---|---|
+| [tuned](eval/results/tuned/split.md) | 6/6 |
+| [one-point](eval/results/one-point/split.md): tuned plus the one-point rule and a worked example | 1/12 |
+| [0.2.0](eval/results/0.2.0/split.md), shipped | 12/18 |
+
+0.2.0 kept the one-point rule but replaced the worked example, and the split came back: the finding's evidence and consequence get their own bullets again, without headings.
+
+### Lines with no consequence
+
+The 0.2.0 rewrite was checked with its own A/B (Opus 5, 2 prompts, judged by a reader): on a prompt asking whether a push is safe, lines with no consequence for the reader fell from 4.5 per reply with the tuned rules (2 replies) to 0 with 0.2.0 (3 replies), and on a diff summary both arms kept the same four caveats. The replies from that run are not in the repo.
 
 ## License
 
