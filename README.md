@@ -87,7 +87,7 @@ node --test scripts/check.test.mjs
 
 ## Measuring the effect
 
-The numbers below are for the shipped rules, measured on Opus 5 in fresh headless sessions isolated from your own settings and other plugins (`--setting-sources ""`, no tools, a temporary working directory), so the plugin is the only difference between the arms. The replies and scores are in [eval/results/0.2.0/](eval/results/0.2.0/). Each run costs real usage on your account.
+The numbers below are for the shipped rules, measured on Opus 5 in fresh headless sessions isolated from your own settings and other plugins (`--setting-sources ""`, no tools, a temporary working directory), so the plugin is the only difference between the arms. The replies and scores are in [eval/results/0.2.1/](eval/results/0.2.1/). Each run costs real usage on your account.
 
 ### Length, structure and dropped caveats
 
@@ -100,12 +100,12 @@ node eval/score.mjs <label>
 
 | | Plugin off | Plugin on |
 |---|---|---|
-| Median words per reply | 398 | 284 (-29%) |
-| Replies with a prose paragraph | 25/30 | 12/30 |
+| Median words per reply | 398 | 275 (-31%) |
+| Replies with a prose paragraph | 25/30 | 7/30 |
 | Line one answers the question | 15/30 | 29/30 |
-| Caveats dropped compared with the off reply | | 42 |
+| Caveats dropped compared with the off reply | | 51 |
 
-The rules tell the model to keep a line only if it changes what the reader does, so most of the 42 drops are intended. Some are not: "never log raw reset tokens" is missing from all three password-reset plans and CSRF protection from two. Each off/on pair is a single sample, so part of the difference is run-to-run variation.
+The rules tell the model to keep a line only if it changes what the reader does, so most of the 51 drops are intended, and the reader found no critical safety caveat among them. Some still matter: CSRF protection is missing from two of the three password-reset plans, and the downside of the `tail -f /dev/null` workaround from all three Docker answers. Each off/on pair is a single sample, so part of the difference is run-to-run variation.
 
 ### One finding, one point
 
@@ -115,7 +115,17 @@ The rules tell the model to keep a line only if it changes what the reader does,
 node eval/split.mjs <label>
 ```
 
-12 of 18 replies split the finding: no headings, but the evidence and the consequence each got their own bullet.
+7 of 18 replies still split the finding into separate bullets for its evidence and its consequence.
+
+### Task reports
+
+`eval/report.mjs` hands the model the facts of a finished task, noise included (the checks it ran, its own notes, a step the user said they would take), and asks for the reply to the user. A reader counts the lines the user does not act on and checks that the calls the user must know about survived. Those counts are in `report-judgment.md` next to `report.md`.
+
+```
+node eval/report.mjs <label>
+```
+
+3 prompts, 6 runs each: 1.2 lines per reply that the user does not act on, 4 of 18 replies with none, and no must-have item missing from any reply.
 
 ## License
 
