@@ -61,15 +61,14 @@ Both hooks run `cat` on a file in the plugin directory. There is no Node or othe
 
 ## Requirements and platform status
 
-No runtime. Claude Code (CLI or VS Code extension) is the only requirement.
+No runtime. Claude Code (CLI or VS Code extension) is the only requirement. On Windows, Claude Code runs the hooks in PowerShell 5.1 or later, or in Git Bash when Git for Windows is installed. On macOS and Linux it uses your default shell. All of them have `cat`.
 
-| Setup                                   | Status                                                                                                                                                                                                    |
-| --------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Windows with Git for Windows, CLI       | Verified: new session, resume, fork, clear, compact, reminder on every prompt, Node absent from PATH                                                                                                      |
-| Windows with the hook run by PowerShell | Verified that the same `cat` command works when a hook runs under PowerShell 7 (Claude Code rewrites `${CLAUDE_PLUGIN_ROOT}` for PowerShell). Not verified on a machine with no Git for Windows installed |
-| macOS, CLI                              | Not verified, expected to work (`cat` is built in)                                                                                                                                                        |
-| Linux, CLI                              | Not verified, expected to work                                                                                                                                                                            |
-| VS Code extension, any OS               | Not verified. Hooks run the same way as in the CLI                                                                                                                                                        |
+| Setup                     | Status                                                                                                                                      |
+| ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
+| Windows, CLI              | Verified: new session, resume, fork, clear, compact, reminder on every prompt, Node absent from PATH, and the same hook under PowerShell 7 |
+| macOS, CLI                | Not verified                                                                                                                                |
+| Linux, CLI                | Not verified                                                                                                                                |
+| VS Code extension, any OS | Not verified                                                                                                                                |
 
 If the rules seem missing on your setup, run `claude --debug` and look for the `SessionStart` hook result, or open `/hooks`.
 
@@ -107,13 +106,6 @@ Results so far (Opus 5, 3 runs per prompt per arm, the same 30 plugin-off replie
 | Caveats dropped compared with the off reply |            | 20                                           | 12                                               |
 
 The goal of zero dropped caveats is not met yet. Remaining drops sit in long lists of failure cases and security checks. Each off/on pair is a single sample, so part of the difference is run-to-run variation.
-
-## Known limits
-
-- The ~10 KB per-hook output limit is not documented. A Claude Code update could lower it, so rerun a marker check after major updates.
-- A hook that fails (for example, a shell that cannot run `cat`) is silent: no rules and no visible error.
-- The lean-orchestration plugin injects similar output rules. With both installed, the rules are paid for twice and the two copies can differ in wording.
-- Shorter replies are only better if they keep every warning. The measurement checks that no reply drops a caveat or risk that the plugin-off reply stated.
 
 ## License
 
