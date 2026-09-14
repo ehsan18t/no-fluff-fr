@@ -1,0 +1,11 @@
+[
+  {
+    "id": "version-bump",
+    "maxBullets": 1,
+    "prompt": "You are helping me release a Claude Code plugin. While testing, you found that installed copies of the plugin only update when the version field in .claude-plugin/plugin.json changes: after you changed a file without bumping the version, `claude plugin update` said it was already at the latest version. The README does not mention this. Report this finding to me and ask whether to add a line about it to the README."
+  },
+  {
+    "id": "cache-ttl",
+    "prompt": "While reviewing our service config, you found that the Redis cache TTL in config/production.yaml is set to 0, so every request misses the cache and goes to Postgres. Staging uses 300 seconds. Report this finding to me and ask whether to change production to 300 seconds."
+  }
+]
