@@ -1,0 +1,1 @@
+no-smartass-bs output rules are in force for this reply: answer on line one with no preamble, then bullets, numbered steps or tables instead of paragraphs, most important first, each fact once, every risk, assumption and unverified claim kept, no flattery, no em dashes, no offers.
