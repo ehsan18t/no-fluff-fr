@@ -1,0 +1,6 @@
+node_modules/
+.DS_Store
+Thumbs.db
+*.log
+# raw transcripts from measurement runs; the summary in eval/results is committed
+eval/runs/

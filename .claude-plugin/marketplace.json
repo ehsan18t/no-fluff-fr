@@ -1,0 +1,17 @@
+{
+  "$schema": "https://www.schemastore.org/claude-code-marketplace.json",
+  "name": "no-smartass-bs",
+  "description": "Output rules for Claude Code: answer first, bullets over paragraphs, every risk kept.",
+  "owner": {
+    "name": "Ehsan Khan",
+    "url": "https://github.com/ehsan18t"
+  },
+  "plugins": [
+    {
+      "name": "no-smartass-bs",
+      "description": "Injects clear, concise, actionable output rules at every session start and a one-line reminder on every prompt.",
+      "source": "./",
+      "category": "productivity"
+    }
+  ]
+}

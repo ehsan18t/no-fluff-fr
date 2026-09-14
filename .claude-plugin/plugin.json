@@ -1,0 +1,19 @@
+{
+  "$schema": "https://www.schemastore.org/claude-code-plugin-manifest.json",
+  "name": "no-smartass-bs",
+  "version": "0.1.0",
+  "description": "Makes every reply short, skimmable and easy to act on by injecting output rules at session start and a one-line reminder on every prompt. No skill to load, no runtime, no setup.",
+  "author": {
+    "name": "Ehsan Khan",
+    "url": "https://github.com/ehsan18t"
+  },
+  "homepage": "https://github.com/ehsan18t/no-smartass-bs",
+  "repository": "https://github.com/ehsan18t/no-smartass-bs",
+  "license": "MIT",
+  "keywords": [
+    "output",
+    "concise",
+    "communication",
+    "hooks"
+  ]
+}
