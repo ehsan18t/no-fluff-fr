@@ -1,0 +1,14 @@
+
+# <type>(<scope>): <subject>
+#
+# type:    feat | fix | docs | refactor | test | ci | chore
+# scope:   optional, one of hooks, rules, gate, eval, plugin, readme
+# subject: imperative, lowercase, no period, at most 72 characters
+#
+# Body (optional, after one blank line): why the change was made.
+# One paragraph per line, no hard wrapping, no em dashes.
+# Never add Co-authored-by lines.
+#
+# Examples:
+#   feat(hooks): inject rules on session start and a reminder per prompt
+#   fix(eval): count only real words and catch prose that runs into a list
