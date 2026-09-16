@@ -1,5 +1,5 @@
 {
-  "description": "Injects the no-smartass-bs output rules at every session start (startup, resume, clear, compact, fork) and a one-line reminder on every prompt.",
+  "description": "Injects the no-fluff-fr output rules at every session start (startup, resume, clear, compact, fork) and a one-line reminder on every prompt.",
   "hooks": {
     "SessionStart": [
       { "hooks": [ { "type": "command", "command": "cat \"${CLAUDE_PLUGIN_ROOT}/inject/session-start.md\"", "timeout": 5 } ] }

@@ -1,6 +1,6 @@
 {
   "$schema": "https://www.schemastore.org/claude-code-marketplace.json",
-  "name": "no-smartass-bs",
+  "name": "no-fluff-fr",
   "description": "Output rules for Claude Code: answer first, bullets over paragraphs, only lines that change what the reader does.",
   "owner": {
     "name": "Ehsan Khan",
@@ -8,7 +8,7 @@
   },
   "plugins": [
     {
-      "name": "no-smartass-bs",
+      "name": "no-fluff-fr",
       "description": "Injects clear, concise, actionable output rules at every session start and a one-line reminder on every prompt.",
       "source": "./",
       "category": "productivity"

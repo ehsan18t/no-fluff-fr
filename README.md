@@ -1,33 +1,33 @@
-# no-smartass-bs
+# no-fluff-fr
 
 A Claude Code plugin that makes every reply short, skimmable and easy to act on. It injects a set of output rules into context at the start of every session and a one-line reminder on every prompt, so Claude writes the reply that way the first time. No skill to load, no second pass, no runtime, no setup.
 
 ## Install and manage
 
-The commands below run in a terminal. The VS Code extension does not put `claude` on your PATH, so in the extension type `/plugins` in the prompt box instead: add the `ehsan18t/no-smartass-bs` marketplace there, then install, enable or disable the plugin.
+The commands below run in a terminal. The VS Code extension does not put `claude` on your PATH, so in the extension type `/plugins` in the prompt box instead: add the `ehsan18t/no-fluff-fr` marketplace there, then install, enable or disable the plugin.
 
 ### Install
 
 ```bash
-claude plugin marketplace add ehsan18t/no-smartass-bs
-claude plugin install no-smartass-bs
+claude plugin marketplace add ehsan18t/no-fluff-fr
+claude plugin install no-fluff-fr
 ```
 
-Inside a Claude Code session: `/plugin marketplace add ehsan18t/no-smartass-bs`, then `/plugin install no-smartass-bs`.
+Inside a Claude Code session: `/plugin marketplace add ehsan18t/no-fluff-fr`, then `/plugin install no-fluff-fr`.
 
 Restart Claude Code after installing. Installing is the only step: there are no settings and nothing else to run.
 
 To try it without installing, start a session with the plugin loaded from a local clone:
 
 ```bash
-claude --plugin-dir /path/to/no-smartass-bs
+claude --plugin-dir /path/to/no-fluff-fr
 ```
 
 ### Update
 
 ```bash
-claude plugin marketplace update no-smartass-bs
-claude plugin update no-smartass-bs
+claude plugin marketplace update no-fluff-fr
+claude plugin update no-fluff-fr
 ```
 
 The first command fetches the latest version from GitHub, because third-party marketplaces do not update on their own by default. Restart Claude Code to apply the update.
@@ -35,18 +35,18 @@ The first command fetches the latest version from GitHub, because third-party ma
 ### Uninstall
 
 ```bash
-claude plugin uninstall no-smartass-bs
+claude plugin uninstall no-fluff-fr
 ```
 
-Inside a Claude Code session: `/plugin uninstall no-smartass-bs`.
+Inside a Claude Code session: `/plugin uninstall no-fluff-fr`.
 
 ### Disable
 
 ```bash
-claude plugin disable no-smartass-bs
+claude plugin disable no-fluff-fr
 ```
 
-Inside a Claude Code session: `/plugin disable no-smartass-bs`.
+Inside a Claude Code session: `/plugin disable no-fluff-fr`.
 
 ## What it does
 

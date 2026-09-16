@@ -94,7 +94,7 @@ Great, I've finished! First I read the auth module, then I searched for existing
 
 ### Edit task
 
-User: `Copy the changelog rules from the no-smartass-bs plugin into CHANGELOGS.md here.`
+User: `Copy the changelog rules from the no-fluff-fr plugin into CHANGELOGS.md here.`
 
 To do:
 ```text
@@ -103,11 +103,11 @@ Done, not committed. Two things differ from a literal copy: the release commit f
 
 Not to do:
 ```text
-I replaced this repo's changelog rules with the no-smartass-bs ones. The intro line and rules block now match that plugin, and the 0.7.0 to 0.9.0 entries are unchanged, as you chose. Nothing is committed.
+I replaced this repo's changelog rules with the no-fluff-fr ones. The intro line and rules block now match that plugin, and the 0.7.0 to 0.9.0 entries are unchanged, as you chose. Nothing is committed.
 
 - **Release commit message:** kept as `release: X.Y.Z`. Every release here from 0.4.0 to 0.9.0 uses that form.
 - **Finding the previous release:** changed to `git log --grep="^release: [0-9]"`. I checked it and it lists exactly those 8 releases. The copied grep finds only 0.8.0, so the next entry would have repeated everything from 0.8.1 on.
-- **Two old rules are gone,** because no-smartass-bs does not have them: rewrite the entry if the version already exists, and check plugin.json matches before a release.
+- **Two old rules are gone,** because no-fluff-fr does not have them: rewrite the entry if the version already exists, and check plugin.json matches before a release.
 ```
 
 The reader asked for a copy, so only the places where it is not a copy change what they do. The checks, the reasons and the repeated request do not.
