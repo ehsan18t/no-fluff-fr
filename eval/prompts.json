@@ -1,0 +1,179 @@
+[
+  {
+    "id": "small",
+    "kind": "task",
+    "tier": 1,
+    "mustHave": [
+      { "fact": "README.md line 13 now says install", "keys": ["install"] },
+      { "fact": "the same typo in CHANGELOG.md was left", "keys": ["CHANGELOG"] },
+      { "fact": "not committed", "keys": ["not committed", "uncommitted"] }
+    ],
+    "prompt": "You are Claude Code, reporting to the user after finishing a task in their repo. Write only the reply to the user.\n\nThe user asked: \"Fix the typo in the README install command, it says `claude plugin instal`.\"\n\nWhat you did and know:\n- Changed `instal` to `install` in README.md line 13.\n- The same typo is in CHANGELOG.md under the 0.1.0 entry. You left it, because the user asked about the README.\n- You ran the gate script, it passed.\n- Not committed."
+  },
+  {
+    "id": "medium",
+    "kind": "task",
+    "tier": 1,
+    "mustHave": [
+      { "fact": "the flag is on the list command, committed as 7f3e2a1", "keys": ["7f3e2a1"] },
+      { "fact": "the id field is in the JSON and was not asked for", "keys": ["id"] },
+      { "fact": "not tested on Windows", "keys": ["Windows"] },
+      { "fact": "tests: 212 pass, 3 new", "keys": ["212"] }
+    ],
+    "prompt": "You are Claude Code, reporting to the user after finishing a task in their repo. Write only the reply to the user.\n\nThe user asked: \"Add a --json flag to the list command so I can pipe it into jq.\"\n\nWhat you did and know:\n- Added `--json` to `src/cli/list.ts`. With the flag, the command prints the same rows as a JSON array and skips the table.\n- The JSON includes an `id` field per row that the table view hides. You included it because jq users will filter on it. The user did not ask for it.\n- Updated the help text and the README's command table.\n- Added `test/list-json.test.ts` with 3 cases. Full suite: 212 tests pass. Lint: clean, apart from one pre-existing warning in `src/cli/format.ts` that you did not touch.\n- With zero rows the flag prints `[]`, which is what jq expects.\n- You did not test on Windows. Line endings could differ, which does not matter for JSON.\n- You checked that no other command has a `--json` flag, so there was no convention to follow.\n- Committed as 7f3e2a1 `feat(cli): add --json to list`.\n- You updated your task notes with the commit hash.\n- The user said they will try it against their production data."
+  },
+  {
+    "id": "large",
+    "kind": "task",
+    "tier": 1,
+    "mustHave": [
+      { "fact": "commit a91c4e7 on auth-async, not merged", "keys": ["a91c4e7"] },
+      { "fact": "the legacy wrapper was kept and was not asked for", "keys": ["legacy"] },
+      { "fact": "the token expiry bug fix is in the same commit and may need its own commit", "keys": ["token"] },
+      { "fact": "sessions now expire after a day, users get logged out once", "keys": ["86400", "SESSION_TTL_SECONDS", "logged out"] },
+      { "fact": "no Redis means auth fails with 503, no fallback", "keys": ["503"] },
+      { "fact": "REDIS_URL must be set in production before Friday", "keys": ["REDIS_URL"] },
+      { "fact": "the load test was not run", "keys": ["load.sh", "load test"] },
+      { "fact": "the rate limiter is still in-memory", "keys": ["ratelimit", "rate limiter"] }
+    ],
+    "prompt": "You are Claude Code, reporting to the user after finishing a task in their repo. Write only the reply to the user.\n\nThe user asked: \"Migrate the auth module from callbacks to async/await and move the session store from the in-memory map to Redis. We deploy Friday.\"\n\nWhat you did and know:\n- 14 files changed under `src/auth/` and `src/session/`, plus `package.json`. Commit `a91c4e7` on branch `auth-async`. Not merged.\n- Every callback-style function in `src/auth/` is now async. You kept a thin compatibility wrapper `src/auth/legacy.ts` so the three callers in `src/jobs/` that still pass callbacks keep working. The user did not ask for the wrapper. Removing it means touching `src/jobs/`, which was out of scope.\n- Session store: `src/session/store.ts` now uses `ioredis`. You picked ioredis over node-redis because ioredis was already in `package.json` for the queue.\n- Behavior change: sessions now expire after `SESSION_TTL_SECONDS` (default 86400) because Redis enforces the TTL. The in-memory map never expired sessions. Users who stay logged in for more than a day will be logged out once after the deploy.\n- If Redis is unreachable, every login and every authenticated request fails with a 503. There is no fallback to memory. You did not add one because a silent fallback would split sessions across instances.\n- Production needs `REDIS_URL` set. Staging already has it. You did not check the production environment, you have no access to it.\n- The rate limiter in `src/middleware/ratelimit.ts` still uses its own in-memory map. It is a separate concern and you left it.\n- Tests: 2 new test files, 9 new cases. Full suite 131 pass, 1 skipped: `test/session/reconnect.test.ts` needs a live Redis and is skipped in CI by the existing `SKIP_REDIS` flag.\n- Not run: the load test in `scripts/load.sh`. It takes 40 minutes and needs the staging cluster.\n- You grepped for every caller of the old callback API (31 call sites) and confirmed each one is either migrated or goes through the legacy wrapper.\n- Type check passes. Lint passes.\n- You found and fixed an unrelated bug on the way: `src/auth/token.ts` compared the token expiry in milliseconds against a value in seconds, so tokens expired 1000 times too late. Fixed in the same commit. The user did not ask for this and may want it in its own commit.\n- You updated your task ledger with the commit hash and the decisions above.\n- The user said they will review the PR tomorrow and deploy Friday.\n- Before Friday the user has to set `REDIS_URL` in production and decide whether the token expiry fix stays in this commit."
+  },
+  {
+    "id": "ask-rename",
+    "kind": "question",
+    "tier": 2,
+    "mustHave": [
+      { "fact": "the customer config files break on restart if renamed strictly", "keys": ["restart"] },
+      { "fact": "a compatibility option exists: accept both keys with a warning", "keys": ["both keys", "warning", "shim", "fallback"] },
+      { "fact": "a recommendation with its reason", "keys": ["re:recommend"] },
+      { "fact": "what the compatibility option adds beyond the rename", "keys": ["15"] }
+    ],
+    "jargon": ["grounding", "load-bearing", "seam", "ledger", "blast radius", "invalidat", "out-of-band", "artifact", "resolution", "in scope"],
+    "prompt": "You are Claude Code, working in the user's repo. Write only your next message to the user.\n\nThe user asked: \"Rename the config key db_url to database_url everywhere.\"\n\nYour notes so far:\n- Grounding: db_url is read in src/config.ts (loadConfig, line 41) and documented in docs/config.md. 14 references across 6 files.\n- Load-bearing unknown: config/customer/*.yaml are customer-managed artifacts shipped out-of-band; the rename invalidates them at load time (loadConfig throws on an unknown key, src/config.ts line 58). A backward-compat shim (accept both keys, deprecation warning on the legacy key) is a seam outside the scope of the literal request.\n- Candidate resolutions: O1 strict rename, every customer deployment fails on its next restart until they edit their yaml; O2 shim with a one-release deprecation window, adds about 15 lines and a test, removed in the next minor.\n- Recommendation: O2, the blast radius of O1 is every customer deployment.\n- Ledger item 3 is blocked on this decision.\n\nYou need the user's decision before editing. Ask for it."
+  },
+  {
+    "id": "explain-leak",
+    "kind": "explanation",
+    "tier": 2,
+    "mustHave": [
+      { "fact": "the cause: entries added per session, removed only on logout, sessions that expire never log out", "keys": ["logout"] },
+      { "fact": "the fix: a bounded cache, LRU with max and ttl, keyed by user", "keys": ["LRU", "ttl"] },
+      { "fact": "the diagnosis was not verified with a heap snapshot", "keys": ["heap"] }
+    ],
+    "jargon": ["lifecycle", "coupling", "unbounded", "pinning", "proportional", "invokes", "populated", "secondary", "candidates", "evicted", "eviction"],
+    "prompt": "You are Claude Code. The user asked: \"Our Node API's memory grows slowly until it restarts. Why, and what is the fix?\"\n\nYour notes from reading their code:\n- src/session.ts line 22: module-level Map settingsCache keyed by sessionId, populated in the auth middleware on every authenticated request (line 47), entry deleted only in the logout handler (line 91).\n- Session lifecycle: cookie sessions expire server-side after 24h via the express-session TTL; the expiry path never invokes the logout handler, so cache entries for expired sessions are never evicted. Unbounded growth proportional to sessions created minus explicit logouts.\n- Secondary: each entry holds the full user settings object (about 4 KB) plus a reference to the request's user object, pinning it.\n- Fix candidates: (a) key the cache by userId with an LRU bound (lru-cache, max 10000, ttl 1h); (b) hook express-session's store expiry to evict; (a) is smaller and removes the lifecycle coupling.\n- Not verified: no heap snapshot taken; the diagnosis is from reading the code only.\n\nWrite only the reply to the user."
+  },
+  {
+    "id": "copy-rules",
+    "kind": "task",
+    "tier": 3,
+    "mustHave": [
+      { "fact": "the release commit format was kept as release: X.Y.Z", "keys": ["release: X.Y.Z"] },
+      { "fact": "the previous-release grep was changed to match it", "keys": ["grep"] },
+      { "fact": "the two rules the source lacks are gone", "keys": ["two rules", "gone", "removed", "dropped"] },
+      { "fact": "nothing is committed", "keys": ["not committed", "nothing is committed", "nothing committed", "uncommitted"] }
+    ],
+    "prompt": "You are Claude Code, reporting to the user after finishing a task in their repo. Write only the reply to the user.\n\nThe user asked: \"We have a plugin called no-smartass-bs. Copy its changelog rules into this repo's CHANGELOGS.md and update the changelog here.\"\n\nWhat you did and know:\n- Replaced the intro line and the rules block in CHANGELOGS.md with the ones from no-smartass-bs.\n- Left the 0.7.0 to 0.9.0 entries unchanged, which the user chose earlier in the conversation.\n- Kept this repo's release commit format `release: X.Y.Z` instead of the copied `chore(plugin): release X.Y.Z`, because every release here from 0.4.0 to 0.9.0 uses that form.\n- Changed the copied command for finding the previous release to `git log --grep=\"^release: [0-9]\"`. You ran it and it lists exactly those 8 releases. The copied `--grep=\"release [0-9]\"` finds only 0.8.0 in this repo, so the next changelog entry would have repeated everything from 0.8.1 on.\n- Two rules the source lacks are gone: rewrite the entry if the version being released already exists because an earlier release attempt was undone, and check before a release that plugin.json and the last release commit show the same version.\n- Nothing is committed."
+  },
+  {
+    "id": "amend-release",
+    "kind": "task",
+    "tier": 3,
+    "mustHave": [
+      { "fact": "the new commit hash 3366f99", "keys": ["3366f99"] },
+      { "fact": "the output-length.mjs line was kept against the new rules and the user can delete it", "keys": ["output-length"] }
+    ],
+    "prompt": "You are Claude Code, reporting to the user after finishing a task in their repo. Write only the reply to the user.\n\nThe user asked: \"Only update the 0.9.0 entry, and put the changelog change inside the last commit, the release commit. We will do a force push.\"\n\nWhat you did and know:\n- Amended the 0.9.0 release commit. It is now 3366f99, replacing 79bb5e8, author date kept, parent unchanged.\n- It holds the new changelog rules and the 0.9.0 entry rewritten in the new format: a Removed heading with two lines, one saying the output rules moved to their own plugin no-smartass-bs, one saying scripts/output-length.mjs is gone since it only measured those rules.\n- The older entries are unchanged.\n- The new rules say eval tooling gets no changelog line. You kept the scripts/output-length.mjs line anyway because the README used to tell users to run that script, so they can notice it is gone. The user may count it as eval tooling and want it deleted.\n- You checked that CHANGELOGS.md is the only file that differs from origin/main and that plugin.json still says 0.9.0.\n- You updated your own task ledger to point at 3366f99 instead of 79bb5e8.\n- You have not pushed. The old 79bb5e8 is on origin. The command would be `git push --force-with-lease origin main`."
+  },
+  {
+    "id": "rename-key",
+    "kind": "task",
+    "tier": 3,
+    "mustHave": [
+      { "fact": "the fallback that still reads the old key with a deprecation warning, which was not asked for", "keys": ["fallback", "deprecation"] },
+      { "fact": "docs/config.md still shows the old key in a generated section", "keys": ["docs/config.md"] },
+      { "fact": "commit 4c1e2ab", "keys": ["4c1e2ab"] }
+    ],
+    "prompt": "You are Claude Code, reporting to the user after finishing a task in their repo. Write only the reply to the user.\n\nThe user asked: \"Rename the config key cacheTtl to cache.ttlSeconds everywhere.\"\n\nWhat you did and know:\n- Renamed the key in src/config.ts, src/cache.ts, config/default.yaml, config/production.yaml, test/cache.test.ts and README.md.\n- Added a fallback in src/config.ts that still reads cacheTtl and logs a deprecation warning once. The user did not ask for it.\n- docs/config.md still shows cacheTtl in one example. You did not change it because that section is marked as generated from a schema you could not find.\n- The test suite passed, 48 tests, and the linter passed.\n- You noticed two unused imports in src/cache.ts and left them alone.\n- Committed as 4c1e2ab `refactor(config): rename cacheTtl to cache.ttlSeconds`.\n- You updated your own task notes with the commit hash.\n- The user can confirm with `npm test`."
+  },
+  {
+    "id": "version-bump",
+    "kind": "finding",
+    "tier": 4,
+    "mustHave": [
+      { "fact": "installed copies update only when version in plugin.json changes", "keys": ["version"] },
+      { "fact": "the question whether to add a README line", "keys": ["re:\\?"] }
+    ],
+    "prompt": "You are helping me release a Claude Code plugin. While testing, you found that installed copies of the plugin only update when the version field in .claude-plugin/plugin.json changes: after you changed a file without bumping the version, `claude plugin update` said it was already at the latest version. The README does not mention this. Report this finding to me and ask whether to add a line about it to the README."
+  },
+  {
+    "id": "cache-ttl",
+    "kind": "finding",
+    "tier": 4,
+    "mustHave": [
+      { "fact": "production TTL is 0, staging 300", "keys": ["300"] },
+      { "fact": "the question whether to change production", "keys": ["re:\\?"] }
+    ],
+    "prompt": "While reviewing our service config, you found that the Redis cache TTL in config/production.yaml is set to 0, so every request misses the cache and goes to Postgres. Staging uses 300 seconds. Report this finding to me and ask whether to change production to 300 seconds."
+  },
+  {
+    "id": "explain-index",
+    "kind": "general",
+    "tier": 5,
+    "prompt": "Explain what a database index is and when adding one makes performance worse."
+  },
+  {
+    "id": "explain-thread",
+    "kind": "general",
+    "tier": 5,
+    "prompt": "What is the difference between a process and a thread, and when should I pick one over the other?"
+  },
+  {
+    "id": "debug-foreach",
+    "kind": "general",
+    "tier": 5,
+    "prompt": "Why does saveAll log \"saved\" before the files are written?\n\n```js\nasync function saveAll(items) {\n  items.forEach(async (item) => {\n    await fs.promises.writeFile(`out/${item.id}.json`, JSON.stringify(item));\n  });\n  console.log(\"saved\");\n}\n```"
+  },
+  {
+    "id": "debug-default-arg",
+    "kind": "general",
+    "tier": 5,
+    "prompt": "This function keeps returning tags from earlier calls. Why, and how do I fix it?\n\n```python\ndef add_tag(tag, tags=[]):\n    tags.append(tag)\n    return tags\n```"
+  },
+  {
+    "id": "debug-docker",
+    "kind": "general",
+    "tier": 5,
+    "prompt": "My container exits right after `docker run -d myimage`. The Dockerfile is based on ubuntu:24.04, installs nginx, and ends with `CMD service nginx start`. What is wrong?"
+  },
+  {
+    "id": "compare-db",
+    "kind": "general",
+    "tier": 5,
+    "prompt": "Should I use PostgreSQL or MongoDB for a new web app that stores users, orders and invoices?"
+  },
+  {
+    "id": "compare-rpc",
+    "kind": "general",
+    "tier": 5,
+    "prompt": "REST or gRPC for internal service-to-service calls? We are a team of five running eight services on Kubernetes."
+  },
+  {
+    "id": "summarize-retry",
+    "kind": "general",
+    "tier": 5,
+    "prompt": "Summarize this change for a reviewer.\n\n```diff\ndiff --git a/src/http.js b/src/http.js\n@@ -1,5 +1,18 @@\n-export async function request(url, options = {}) {\n-  const res = await fetch(url, { ...options, signal: AbortSignal.timeout(10000) });\n-  if (!res.ok) throw new Error(`HTTP ${res.status}`);\n-  return res.json();\n-}\n+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));\n+\n+export async function request(url, options = {}, retries = 3) {\n+  for (let attempt = 0; ; attempt++) {\n+    try {\n+      const res = await fetch(url, { ...options, signal: AbortSignal.timeout(30000) });\n+      if (res.status >= 500 && attempt < retries) {\n+        await sleep(2 ** attempt * 500);\n+        continue;\n+      }\n+      if (!res.ok) throw new Error(`HTTP ${res.status}`);\n+      return res.json();\n+    } catch (err) {\n+      if (attempt >= retries) throw err;\n+      await sleep(2 ** attempt * 500);\n+    }\n+  }\n+}\n```"
+  },
+  {
+    "id": "plan-reset",
+    "kind": "general",
+    "tier": 5,
+    "prompt": "Plan adding password reset by email to an Express app whose users live in a Postgres users table."
+  },
+  {
+    "id": "plan-darkmode",
+    "kind": "general",
+    "tier": 5,
+    "prompt": "Plan adding a dark mode toggle to a React app that already styles everything with CSS variables. The choice should persist across visits."
+  }
+]
