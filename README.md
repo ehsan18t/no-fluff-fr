@@ -85,47 +85,16 @@ node scripts/check.mjs
 node --test scripts/check.test.mjs
 ```
 
-## Measuring the effect
+## Testing a rule change
 
-The numbers below are for the shipped rules, measured on Opus 5 in fresh headless sessions isolated from your own settings and other plugins (`--setting-sources ""`, no tools, a temporary working directory), so the plugin is the only difference between the arms. The replies and scores are in [eval/results/0.2.1/](eval/results/0.2.1/). Each run costs real usage on your account.
+One command runs the same prompts with the last release's rules and with the working tree's rules, in fresh headless sessions, counts what a script can count, lets a blind judge compare each pair, and prints one result. Nothing is stored in the repo. Each run costs real usage on your account, and the header shows the estimate before anything runs.
 
-### Length, structure and dropped caveats
-
-`eval/run.mjs` runs 10 fixed prompts (explain, debug, compare, summarize, plan) 3 times each with the plugin off and on, and `eval/score.mjs` counts words and prose paragraphs. A reader, not the script, judges whether line one answers the question and whether a caveat stated with the plugin off is missing with it on. Those judgments are in `judgment.md` next to `metrics.md`.
-
-```
-node eval/run.mjs <label>
-node eval/score.mjs <label>
+```bash
+node eval/run.mjs small        # tiny | small | medium | large | xl
+node eval/run.mjs small --dry-run
 ```
 
-| | Plugin off | Plugin on |
-|---|---|---|
-| Median words per reply | 398 | 275 (-31%) |
-| Replies with a prose paragraph | 25/30 | 7/30 |
-| Line one answers the question | 15/30 | 29/30 |
-| Caveats dropped compared with the off reply | | 51 |
-
-The rules tell the model to keep a line only if it changes what the reader does, so most of the 51 drops are intended, and the reader found no critical safety caveat among them. Some still matter: CSRF protection is missing from two of the three password-reset plans, and the downside of the `tail -f /dev/null` workaround from all three Docker answers. Each off/on pair is a single sample, so part of the difference is run-to-run variation.
-
-### One finding, one point
-
-`eval/split.mjs` runs two prompts that each report a single finding and counts the replies that break it into a heading or into separate bullets for its evidence, impact and question:
-
-```
-node eval/split.mjs <label>
-```
-
-7 of 18 replies still split the finding into separate bullets for its evidence and its consequence.
-
-### Task reports
-
-`eval/report.mjs` hands the model the facts of a finished task, noise included (the checks it ran, its own notes, a step the user said they would take), and asks for the reply to the user. A reader counts the lines the user does not act on and checks that the calls the user must know about survived. Those counts are in `report-judgment.md` next to `report.md`.
-
-```
-node eval/report.mjs <label>
-```
-
-3 prompts, 6 runs each: 1.2 lines per reply that the user does not act on, 4 of 18 replies with none, and no must-have item missing from any reply.
+What is tested, why, how to read the result and where the next improvement comes from: [eval/README.md](eval/README.md).
 
 ## License
 
