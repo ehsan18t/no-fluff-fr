@@ -1,7 +1,7 @@
 {
   "$schema": "https://www.schemastore.org/claude-code-plugin-manifest.json",
   "name": "no-fluff-fr",
-  "version": "0.2.1",
+  "version": "0.3.0",
   "description": "Makes every reply short, skimmable and easy to act on by injecting output rules at session start and a one-line reminder on every prompt. No skill to load, no runtime, no setup.",
   "author": {
     "name": "Ehsan Khan",

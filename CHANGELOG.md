@@ -10,6 +10,25 @@ Version: patch for fixes to released behavior, minor for anything added, removed
 Never rewrite a released entry, correct it in the next one. No em dashes, no hard wraps.
 -->
 
+## 0.3.0 - 2026-09-18
+
+### Added
+
+- A When you ask section: one question per message, line one is the question, options one per line with what each costs, the recommended one first.
+
+### Changed
+
+- The plugin is renamed to no-fluff-fr.
+- Every section and list leads with its most valuable line, in the words a developer already uses.
+- One item per line, opened by a bold label or a code, with headings of one or two developer words and checks reported as a single line with its numbers.
+- Sentences carry one fact each, name things exactly and in backticks, use the codebase's own names, drop words from the model's working method, and give a reason only where you would ask why.
+- Reference codes take their letter from the title of the list they belong to, and one list holds one kind of item.
+- The reminder on every prompt speaks as you, not about you.
+
+### Removed
+
+- The aliases scr, eli, foc and ref.
+
 ## 0.2.1 - 2026-09-15
 
 ### Fixed
