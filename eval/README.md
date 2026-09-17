@@ -1,10 +1,16 @@
 # Testing the rules
 
-One command compares the rules in the working tree with the rules of the last release, on the same prompts, in fresh headless sessions, and prints one result. Nothing is stored in the repo: run it, read it, and if you want to verify a claim, run it again.
+One command compares the rules in the working tree with the rules of the last release, on the same prompts, in fresh headless sessions, and prints one result.
 
 ```bash
 node eval/run.mjs small
 ```
+
+Two things are kept. `result.json` lands beside the replies in the temp folder and holds every number the run measured. `RESULT.md` in this folder is the committed record of the latest whole judged level, and it is what the main README links to. A partial run leaves it alone and says so: a subset via `--only`, an unjudged rescore, or any run with a failed session would otherwise replace the headline numbers with something narrower.
+
+The terminal always prints the real path to the replies, so you can open them or paste the rescore command straight back in. Files are different: `RESULT.md`, `--out` and `result.json` carry the folder name only, because an absolute temp path has the username of whoever ran it in it and those files get committed and shared. `--paths` puts the real path into them too, and warns you when it writes `RESULT.md`.
+
+`node eval/report.mjs <result.json>` re-renders a saved run in the current format without starting a session. That is what keeps old runs comparable after the report changes.
 
 ## What is being tested
 
@@ -75,6 +81,11 @@ Each prompt in `prompts.json` has a tier, and a level runs every prompt whose ti
 --reps N            runs per prompt
 --only id,id        a subset of the level's prompts
 --out file.md       also write the result as Markdown
---dry-run           plan and cost only
+--json              print the result object instead of the report
+--paths             put the real replies path into the files this writes, not just the terminal
+--label <text>      what to call the new arm (default: working tree), such as the version it ships as
+--dry-run           plan only
 --replies <dir>     rescore a previous run's replies (the folder it printed) without generating
 ```
+
+`node eval/report.mjs <result.json>` renders a saved result on its own. It reads no files but the one you name, runs no sessions, and computes nothing, so changing how the report reads can never change what it says.

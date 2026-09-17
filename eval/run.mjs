@@ -14,6 +14,11 @@
 //   --only id,id         a subset of the level's prompts
 //   --out file.md        also write the report (or the JSON, with --json) to a file
 //   --json               print the result object instead of the report
+//   --paths              put the real replies path into the files this writes, not just
+//                        the terminal. Those paths carry your username, so leave it off
+//                        for anything you commit or send on.
+//   --label <text>       what to call the new arm (default: working tree). Use the version
+//                        these rules will ship as for a run whose report gets published.
 //   --dry-run            print the plan and the cost estimate, run nothing
 //   --replies <dir>      score a previous run's replies again (the folder it printed), no generation
 //
@@ -25,7 +30,7 @@
 import { spawn, execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 // This file measures. report.mjs decides how the measurement reads. Nothing in there
 // can change a number, which is why the two are separate files.
@@ -45,7 +50,7 @@ const flag = (name) => {
 const has = (name) => argv.includes(name);
 const level = argv[0];
 if (!LEVELS[level]) {
-  console.error(`usage: node eval/run.mjs <${Object.keys(LEVELS).join("|")}> [--base <ref>] [--model <id>] [--judge-model <id>] [--no-judge] [--reps N] [--only id,id] [--out file.md] [--json] [--dry-run] [--replies <dir>]`);
+  console.error(`usage: node eval/run.mjs <${Object.keys(LEVELS).join("|")}> [--base <ref>] [--model <id>] [--judge-model <id>] [--no-judge] [--reps N] [--only id,id] [--out file.md] [--json] [--paths] [--dry-run] [--replies <dir>]`);
   process.exit(2);
 }
 const reps = Number(flag("--reps") ?? LEVELS[level].reps);
@@ -61,6 +66,14 @@ const useJudge = !has("--no-judge");
 const outFile = flag("--out");
 const dryRun = has("--dry-run");
 const asJson = has("--json");
+// Off by default so nothing this run writes can leak the absolute temp path, which
+// carries the username of whoever ran it. The terminal gets the real paths either way.
+const showPaths = has("--paths");
+// What to call the new arm. It is the working tree, so that is the honest default, but a
+// run whose report gets published names the version those rules will ship as instead.
+// Not read from plugin.json: that still holds the last released version until the
+// release commit bumps it, which would label both arms the same.
+const newLabel = flag("--label") ?? "working tree";
 const repliesDir = flag("--replies");
 const CONCURRENCY = Number(process.env.CONCURRENCY ?? 6);
 const COST = { reply: 0.08, judge: 0.03 }; // dollars, from earlier runs on Opus 5
@@ -86,7 +99,7 @@ const pairs = prompts.length * reps;
 const estimate = pairs * 2 * COST.reply + (useJudge ? pairs * 2 * COST.judge : 0);
 console.log(`no-fluff-fr eval, level ${level}: ${prompts.length} prompts x ${reps} run${reps > 1 ? "s" : ""} per version`);
 console.log(`old = ${baseLabel}`);
-console.log(`new = working tree${dirty ? "" : " (no uncommitted change in inject/ or hooks/)"}`);
+console.log(`new = ${newLabel === "working tree" ? "working tree" : `${newLabel}, from the working tree`}${dirty ? "" : " (no uncommitted change in inject/ or hooks/)"}`);
 console.log(`judge: ${useJudge ? "on, blind, both orders" : "off"}. Estimated cost: about $${estimate.toFixed(2)}`);
 console.log(`writer model: ${model}${useJudge && judgeModel !== model ? `, judge model: ${judgeModel}` : ""}, effort: ${effort}`);
 if (dryRun) {
@@ -478,11 +491,16 @@ const rerunFlags = `${level}${judgeModel !== model ? ` --judge-model ${judgeMode
 const result = {
   level,
   reps,
+  // eval/RESULT.md is committed, so it has to say how old it is. Local date, not UTC:
+  // a run after 5pm here would otherwise be stamped with tomorrow's or yesterday's date.
+  ranAt: (() => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`; })(),
   old: { ref: baseRef, label: baseLabel },
-  new: { label: "working tree" },
+  new: { label: newLabel },
   models: { writer: [...seen.writer], judge: [...seen.judge], background: [...seen.background], effort },
   cost: spent,
-  repliesDir: work,
+  // The folder name, never its path. RESULT.md is committed and a result object gets
+  // shared, and an absolute temp path carries the username of whoever ran it.
+  replies: basename(work),
   failed,
   judgeFailed,
   sample: { prompts: prompts.length, replies: total("old") + total("new"), judgments: pairsJudged * CRITERIA.length },
@@ -497,8 +515,8 @@ const result = {
   evidence: { facts: evidenceFacts, noise: { old: quotes("old"), new: quotes("new") } },
   commands: {
     rerun: `node eval/run.mjs ${rerunFlags}`,
-    rescore: `node eval/run.mjs ${level} --replies ${work}`,
-    rerender: `node eval/report.mjs ${join(work, "result.json")}`,
+    rescore: `node eval/run.mjs ${level} --replies <the replies folder>`,
+    rerender: `node eval/report.mjs <the replies folder>/result.json`,
   },
 };
 
@@ -514,7 +532,23 @@ if (!result.judge && existsSync(resultPath)) {
 writeFileSync(target, JSON.stringify(result, null, 2) + "\n");
 if (target !== resultPath) console.log(`kept the judged result.json, wrote this one to ${target}`);
 
-const out = asJson ? JSON.stringify(result, null, 2) : render(result);
+// eval/RESULT.md is the committed record of the latest run, so only a whole judged
+// level may replace it. A subset, an unjudged rescore or a run with a failed session
+// would otherwise overwrite the headline numbers with something narrower, and nothing
+// in the file would say so.
+const resultMd = join(repo, "eval", "RESULT.md");
+const partial = [!useJudge && "--no-judge", only && "--only", failed && `${failed} failed ${failed === 1 ? "session" : "sessions"}`, judgeFailed && `${judgeFailed} failed judge ${judgeFailed === 1 ? "pair" : "pairs"}`].filter(Boolean);
+const forFile = showPaths ? { dir: work } : {};
+if (partial.length) console.log(`left ${resultMd} alone: this run was partial (${partial.join(", ")})`);
+else {
+  writeFileSync(resultMd, render(result, forFile) + "\n");
+  if (showPaths) console.log(`WARNING: --paths put your absolute temp path into ${resultMd}. That file is committed. Re-run without --paths before you commit it.`);
+}
+
+// The terminal is yours and it is gone when you close it, so it always gets the real
+// paths. A file might be committed or sent on, so it only gets them on --paths.
 console.log();
-console.log(out);
-if (outFile) writeFileSync(outFile, out + "\n");
+console.log(asJson ? JSON.stringify(result, null, 2) : render(result, { dir: work }));
+console.log();
+console.log(`replies and result.json: ${work}`);
+if (outFile) writeFileSync(outFile, (asJson ? JSON.stringify(result, null, 2) : render(result, forFile)) + "\n");

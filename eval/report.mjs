@@ -60,7 +60,14 @@ const plural = (n, one, many) => (n === 1 ? one : many);
 
 // ---------------------------------------------------------------------------- render
 
-export function render(r) {
+// The result object always carries the folder name and a `<the replies folder>`
+// placeholder, never a path, so anything rendered from it is safe to publish by
+// default. Pass { dir } to put the real absolute path back in, which run.mjs does for
+// the terminal always and for a file only on --paths.
+const PLACEHOLDER = "<the replies folder>";
+
+export function render(r, { dir } = {}) {
+  const withDir = (cmd) => (dir ? cmd.split(PLACEHOLDER).join(dir) : cmd);
   const out = [];
   const say = (s = "") => out.push(s);
   let n = 0;
@@ -76,7 +83,10 @@ export function render(r) {
   say(`  sample   ${r.sample.prompts} ${plural(r.sample.prompts, "prompt", "prompts")} x ${r.reps} per arm  =  ${r.sample.replies} replies${r.judge ? `, ${r.sample.judgments} blind judgments` : ""}${r.failed ? `, ${r.failed} failed` : ""}`);
   say(`  writer   ${r.models.writer.join(", ") || "unknown"}, effort ${r.models.effort}   ${r.models.writer.length > 1 ? "(VARIED, see the warning below)" : "(both arms, same model)"}`);
   say(`  judge    ${r.judge ? `${r.models.judge.join(", ") || "unknown"}, blind, both label orders${r.judgeFailed ? `, ${r.judgeFailed} ${plural(r.judgeFailed, "pair", "pairs")} failed` : ""}` : "off"}`);
-  say(`  cost     $${r.cost.toFixed(2)}        replies   ${r.repliesDir}`);
+  // No cost line. What a run bills is the reader's own account and their business,
+  // not a number this report has any standing to put in front of them.
+  say(`  replies  ${dir ?? r.replies}`);
+  if (r.ranAt) say(`  ran      ${r.ranAt}`);
   say(fence);
   if (r.models.writer.length > 1) {
     say();
@@ -155,8 +165,8 @@ export function render(r) {
     const same = r.models.judge.length === 1 && r.models.writer.length === 1 && r.models.judge[0] === r.models.writer[0];
     say(`- ${r.models.judge.join(", ")} judged, ${r.models.writer.join(", ")} wrote. ${same ? "Same model on both sides, so a shared blind spot is not caught. Pass --judge-model to change that." : "Different models, so a shared blind spot is not scoring itself."}`);
   }
-  say(`- Re-run it: ${code(r.commands.rerun)}. Rescore these same replies without paying to regenerate: ${code(r.commands.rescore)}.`);
-  say(`- Re-render this report from the saved result, free: ${code(r.commands.rerender)}.`);
+  say(`- Re-run it: ${code(r.commands.rerun)}. Score these same replies again without regenerating them: ${code(withDir(r.commands.rescore))}.`);
+  say(`- Re-render this report from the saved result: ${code(withDir(r.commands.rerender))}.`);
 
   return out.join("\n");
 }
