@@ -12,9 +12,13 @@
 //   --no-judge           counts only, no judge calls
 //   --reps N             runs per prompt (default: the level's)
 //   --only id,id         a subset of the level's prompts
-//   --out file.md        also write the result as Markdown
+//   --out file.md        also write the report (or the JSON, with --json) to a file
+//   --json               print the result object instead of the report
 //   --dry-run            print the plan and the cost estimate, run nothing
 //   --replies <dir>      score a previous run's replies again (the folder it printed), no generation
+//
+// Every run writes result.json beside the replies. `node eval/report.mjs <result.json>`
+// re-renders any past run in the current format, for free.
 //
 // Env: CONCURRENCY (default 6).
 
@@ -23,6 +27,9 @@ import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFil
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+// This file measures. report.mjs decides how the measurement reads. Nothing in there
+// can change a number, which is why the two are separate files.
+import { render } from "./report.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const repo = join(here, "..");
@@ -38,7 +45,7 @@ const flag = (name) => {
 const has = (name) => argv.includes(name);
 const level = argv[0];
 if (!LEVELS[level]) {
-  console.error(`usage: node eval/run.mjs <${Object.keys(LEVELS).join("|")}> [--base <ref>] [--model <id>] [--judge-model <id>] [--no-judge] [--reps N] [--only id,id] [--out file.md] [--dry-run] [--replies <dir>]`);
+  console.error(`usage: node eval/run.mjs <${Object.keys(LEVELS).join("|")}> [--base <ref>] [--model <id>] [--judge-model <id>] [--no-judge] [--reps N] [--only id,id] [--out file.md] [--json] [--dry-run] [--replies <dir>]`);
   process.exit(2);
 }
 const reps = Number(flag("--reps") ?? LEVELS[level].reps);
@@ -53,6 +60,7 @@ const judgeModel = flag("--judge-model") ?? model;
 const useJudge = !has("--no-judge");
 const outFile = flag("--out");
 const dryRun = has("--dry-run");
+const asJson = has("--json");
 const repliesDir = flag("--replies");
 const CONCURRENCY = Number(process.env.CONCURRENCY ?? 6);
 const COST = { reply: 0.08, judge: 0.03 }; // dollars, from earlier runs on Opus 5
@@ -252,6 +260,7 @@ for (const arm of ["old", "new"]) for (const p of prompts) counts[arm][p.id] = r
 
 const CRITERIA = ["complete", "noise", "skimmable", "readable", "lineOne"];
 
+
 function judgePrompt(p, a, b) {
   const facts = p.mustHave ? `Facts the reply must state:\n${p.mustHave.map((m) => `- ${m.fact}`).join("\n")}` : "There is no fixed list of required facts. Judge completeness on what a developer needs in order to act.";
   return `You are judging two replies to the same request, both written by an AI coding assistant to a developer. You did not write them. Be fair to both. Answer with JSON only.
@@ -300,6 +309,10 @@ function parseJudge(text) {
 
 // verdicts[id][rep] = { criterion: "new" | "old" | "tie" | "n/a" }, evidence lists keyed by arm
 const verdicts = {};
+// agreed[criterion] = pairs where both label orders reached the same verdict.
+// A tie hides two different things, a real tie and a judge that flipped with the
+// labels, so the count is kept before the two are collapsed.
+const agreed = {};
 const evidence = { missing: { old: [], new: [] }, noise: { old: [], new: [] } };
 let judgeFailed = 0;
 
@@ -336,6 +349,9 @@ if (useJudge) {
           const a = toArm1(j1[c]?.winner);
           const b = toArm2(j2[c]?.winner);
           v[c] = a === b ? a : "tie";
+          // A criterion the judge left out of its JSON is no answer, not agreement.
+          const answered = j1[c]?.winner != null && j2[c]?.winner != null;
+          agreed[c] = (agreed[c] ?? 0) + (answered && a === b ? 1 : 0);
         }
         verdicts[p.id][rep - 1] = v;
         const add = (kind, arm, list) => (list ?? []).forEach((q) => evidence[kind][arm].push(`${p.id}${reps > 1 ? `-${rep}` : ""}: ${q}`));
@@ -352,7 +368,22 @@ if (useJudge) {
     }
   }
   await pool(jobs);
-  for (const kind of ["missing", "noise"]) for (const arm of ["old", "new"]) evidence[kind][arm] = [...new Set(evidence[kind][arm])];
+  // The two label orders quote the same line with slightly different wording and
+  // backticks, so an exact-match Set leaves near-duplicates behind. Key on the
+  // prompt plus a squashed prefix of the quote, and keep the first wording seen.
+  const dedupKey = (s) => {
+    const at = s.indexOf(": ");
+    const head = at < 0 ? "" : s.slice(0, at);
+    const body = (at < 0 ? s : s.slice(at + 2)).toLowerCase().replace(/[^a-z0-9 ]+/g, "").replace(/\s+/g, " ").trim();
+    return `${head}|${body.slice(0, 50)}`;
+  };
+  for (const kind of ["missing", "noise"]) {
+    for (const arm of ["old", "new"]) {
+      const kept = new Map();
+      for (const q of evidence[kind][arm]) if (!kept.has(dedupKey(q))) kept.set(dedupKey(q), q);
+      evidence[kind][arm] = [...kept.values()];
+    }
+  }
 }
 
 // ---------------------------------------------------------------------------- result
@@ -363,88 +394,127 @@ const median = (arm) => {
   return v.length ? (v.length % 2 ? v[(v.length - 1) / 2] : (v[v.length / 2 - 1] + v[v.length / 2]) / 2) : 0;
 };
 const missingCount = (arm) => Object.values(counts[arm]).flat().filter(Boolean).reduce((a, c) => a + c.missing.length, 0);
-const lineOneScore = (arm) => {
-  const v = Object.values(counts[arm]).flat().filter((c) => c && c.lineOne !== null);
-  return `${v.filter((c) => c.lineOne).length}/${v.length}`;
-};
 const total = (arm) => Object.values(replies[arm]).flat().filter((t) => t != null).length;
+// One object holds every number this run measured. It is the only thing the report
+// is built from, it is written to result.json beside the replies, and eval/report.mjs
+// turns it into markdown without recomputing any of it.
 
-const lines = [];
-const say = (s = "") => lines.push(s);
-say(`# no-fluff-fr eval: ${level}`);
-say();
-say(`${prompts.length} prompts x ${reps} run${reps > 1 ? "s" : ""} per version, ${total("old")} old and ${total("new")} new replies${failed ? `, ${failed} failed` : ""}. Old = \`${baseLabel}\`. New = working tree. Writer model: ${[...seen.writer].join(", ") || "unknown"}${seen.background.size ? ` (background: ${[...seen.background].join(", ")})` : ""}, effort ${effort}. Judge: ${useJudge ? `${[...seen.judge].join(", ") || "unknown"}, blind, both orders, a disagreement counts as a tie${judgeFailed ? `, ${judgeFailed} pair${judgeFailed > 1 ? "s" : ""} failed` : ""}` : "off"}. Cost: $${spent.toFixed(2)}. Replies: ${work}`);
-if (seen.writer.size > 1) {
-  say();
-  say(`**WARNING:** the writer model varied across sessions (${[...seen.writer].join(", ")}). A comparison is valid only on one writer model. Pin it with --model.`);
-}
-say();
-say("## Counts (a script counted these)");
-say();
-say("| Metric | Good is | Old | New |");
-say("|---|---|---|---|");
-say(`| Words per reply, median | lower, if no fact is missing | ${median("old")} | ${median("new")} |`);
-say(`| Must-have facts missing (keyword check) | 0 | ${missingCount("old")} | ${missingCount("new")} |`);
-say(`| Line one is one sentence (question ends with ?) | all | ${lineOneScore("old")} | ${lineOneScore("new")} |`);
-say(`| Sentences over 25 words | lower | ${sum("old", "long")} | ${sum("new", "long")} |`);
-say(`| Bullets without a bold label or code | 0 | ${sum("old", "unlabeled")} | ${sum("new", "unlabeled")} |`);
-say(`| Headings over 3 words or with a letter in brackets | 0 | ${sum("old", "badHeadings")} | ${sum("new", "badHeadings")} |`);
-say(`| Code letter not matching its heading | 0 | ${sum("old", "codeMismatch")} | ${sum("new", "codeMismatch")} |`);
-say(`| Semicolons | 0 | ${sum("old", "semicolons")} | ${sum("new", "semicolons")} |`);
-say(`| Offer phrases | 0 | ${sum("old", "offers")} | ${sum("new", "offers")} |`);
-say(`| Jargon words copied from the prompt's notes | lower | ${sum("old", "jargon")} | ${sum("new", "jargon")} |`);
-if (useJudge) {
-  say();
-  say("## Judge (blind pairs: which reply is better)");
-  say();
-  say("| Criterion | New better | Tie | Old better |");
-  say("|---|---|---|---|");
-  const all = Object.values(verdicts).flat().filter(Boolean);
-  for (const c of CRITERIA) {
-    say(`| ${c} | ${all.filter((v) => v[c] === "new").length} | ${all.filter((v) => v[c] === "tie").length} | ${all.filter((v) => v[c] === "old").length} |`);
-  }
-  for (const [kind, title] of [["missing", "Missing facts"], ["noise", "Noise lines"]]) {
-    for (const arm of ["old", "new"]) {
-      if (evidence[kind][arm].length) {
-        say();
-        say(`${title}, ${arm}:`);
-        evidence[kind][arm].forEach((q) => say(`- ${q}`));
-      }
-    }
-  }
-}
-say();
-say("## Per prompt");
-say();
-say(`| Prompt | Words old/new | Missing old/new | Line one old/new |${useJudge ? " Judge: complete, noise, skimmable, readable, line one |" : ""}`);
-say(`|---|---|---|---|${useJudge ? "---|" : ""}`);
-const mark = (v) => (v === "new" ? "n" : v === "old" ? "o" : v === "tie" ? "-" : "?");
+const judged = Object.values(verdicts).flat().filter(Boolean);
+const pairsJudged = judged.length;
+const wins = (c, arm) => judged.filter((v) => v[c] === arm).length;
+const newWins = CRITERIA.reduce((a, c) => a + wins(c, "new"), 0);
+const oldWins = CRITERIA.reduce((a, c) => a + wins(c, "old"), 0);
+const wordPct = median("old") ? Math.round(((median("new") - median("old")) / median("old")) * 100) : 0;
+
+// A fact the new arm dropped and the old arm stated is a regression, not a win.
+// The key is `<prompt id>::<fact>`; a fact may contain "::", a prompt id never does.
+const keyOf = (id, rep, fact) => `${id}${reps > 1 ? `-${rep}` : ""}::${fact}`;
+const splitFact = (s) => ({ id: s.slice(0, s.indexOf("::")), fact: s.slice(s.indexOf("::") + 2) });
+const missedIn = (arm) => new Set(prompts.flatMap((p) => counts[arm][p.id].flatMap((c, i) => (c ? c.missing.map((f) => keyOf(p.id, i + 1, f)) : []))));
+// Prompts whose session failed in that arm, so their facts are neither kept nor missed.
+const noReplyIn = (arm) => new Set(prompts.flatMap((p) => counts[arm][p.id].map((c, i) => (c ? null : `${p.id}${reps > 1 ? `-${i + 1}` : ""}`)).filter(Boolean)));
+const missed = { old: missedIn("old"), new: missedIn("new") };
+const noReply = { old: noReplyIn("old"), new: noReplyIn("new") };
+const factsLost = [...missed.new].filter((f) => !missed.old.has(f));
+
+const lineOneOf = (arm) => {
+  const v = Object.values(counts[arm]).flat().filter((c) => c && c.lineOne !== null);
+  return { hit: v.filter((c) => c.lineOne).length, of: v.length };
+};
+
+// Lower is better for every row here. `shown` is false where both arms already sit at
+// the target, so the report can collapse them into one line instead of six empty rows.
+const countRows = [
+  { what: "Bullets with no bold label or code", target: "0", old: sum("old", "unlabeled"), new: sum("new", "unlabeled") },
+  { what: "Must-have facts missed", target: "0", old: missingCount("old"), new: missingCount("new") },
+  { what: "Sentences over 25 words", target: "0", old: sum("old", "long"), new: sum("new", "long") },
+  { what: "Offer phrases", target: "0", old: sum("old", "offers"), new: sum("new", "offers") },
+  { what: "Semicolons", target: "0", old: sum("old", "semicolons"), new: sum("new", "semicolons") },
+  { what: "Headings over 3 words or with a bracketed letter", target: "0", old: sum("old", "badHeadings"), new: sum("new", "badHeadings") },
+  { what: "Code letters not matching their heading", target: "0", old: sum("old", "codeMismatch"), new: sum("new", "codeMismatch") },
+  { what: "Jargon copied from the prompt's notes", target: "lower", old: sum("old", "jargon"), new: sum("new", "jargon") },
+  { what: "Words per reply, median", target: "lower", old: median("old"), new: median("new"), pct: true },
+].map((r) => ({ ...r, pct: r.pct === true, shown: !(r.old === 0 && r.new === 0) }));
+const worseCounts = countRows.filter((r) => r.new > r.old);
+
 const yn = (c) => (c == null ? "?" : c.lineOne === null ? "n/a" : c.lineOne ? "yes" : "no");
+const promptRows = [];
 for (const p of prompts) {
   for (let rep = 1; rep <= reps; rep++) {
     const o = counts.old[p.id][rep - 1];
     const n = counts.new[p.id][rep - 1];
-    const cell = (c, f) => (c == null ? "failed" : f(c));
-    const label = `${p.id}${reps > 1 ? `-${rep}` : ""}`;
-    const miss = (c) => (c.hasMustHave ? String(c.missing.length) : "n/a");
-    const v = useJudge ? verdicts[p.id]?.[rep - 1] : null;
-    say(`| ${label} | ${cell(o, (c) => c.words)} / ${cell(n, (c) => c.words)} | ${cell(o, miss)} / ${cell(n, miss)} | ${yn(o)} / ${yn(n)} |${useJudge ? ` ${v ? CRITERIA.map((c) => mark(v[c])).join(" ") : "failed"} |` : ""}`);
+    const v = useJudge ? (verdicts[p.id]?.[rep - 1] ?? null) : null;
+    const jo = v ? CRITERIA.filter((c) => v[c] === "old").length : 0;
+    const jn = v ? CRITERIA.filter((c) => v[c] === "new").length : 0;
+    const miss = (c) => (c == null ? null : c.hasMustHave ? String(c.missing.length) : "n/a");
+    promptRows.push({
+      id: `${p.id}${reps > 1 ? `-${rep}` : ""}`,
+      // null, not 0, when a reply failed: there is no change to report, and 0% would
+      // read as "unchanged" next to a cell that says failed.
+      words: { old: o?.words ?? null, new: n?.words ?? null, pct: o && n && o.words ? Math.round(((n.words - o.words) / o.words) * 100) : null },
+      missed: { old: miss(o), new: miss(n) },
+      lineOne: { old: yn(o), new: yn(n) },
+      judge: useJudge ? (v ? { old: jo, new: jn } : null) : null,
+      sort: useJudge ? jn - jo : -(o && n && o.words ? Math.round(((n.words - o.words) / o.words) * 100) : 0),
+    });
   }
 }
-if (useJudge) {
-  say();
-  say("Judge column: n = new better, o = old better, - = tie, in the order complete, noise, skimmable, readable, line one.");
-}
-const missingByKeyword = ["old", "new"].flatMap((arm) => prompts.flatMap((p) => counts[arm][p.id].flatMap((c, i) => (c ? c.missing.map((f) => `${arm} ${p.id}${reps > 1 ? `-${i + 1}` : ""}: ${f}`) : []))));
-if (missingByKeyword.length) {
-  say();
-  say("Must-have facts the keyword check did not find:");
-  missingByKeyword.forEach((f) => say(`- ${f}`));
-}
-say();
-say("One reply per prompt is one sample. A difference of one line either way is chance. Look for the same direction across prompts, and for the quoted lines.");
+promptRows.sort((a, b) => b.sort - a.sort);
 
-const result = lines.join("\n");
+const regressions = [];
+for (const r of worseCounts) regressions.push(`**${r.what}**: ${r.old} -> ${r.new} across all replies. Target is ${r.target}.`);
+const lostPrompts = promptRows.filter((p) => p.judge && p.judge.old > p.judge.new);
+for (const p of lostPrompts) regressions.push(`**\`${p.id}\`**: the old rules won ${p.judge.old} criteria to ${p.judge.new}${lostPrompts.length === 1 ? ", the only prompt the new rules do not win" : ""}.`);
+for (const f of factsLost) regressions.push(`**\`${splitFact(f).id}\`** dropped a fact the old rules stated: ${splitFact(f).fact}`);
+
+const stateOf = (arm, f, id) => (missed[arm].has(f) ? "missed" : noReply[arm].has(id) ? "failed" : "kept");
+const evidenceFacts = [...new Set([...missed.old, ...missed.new])].map((f) => {
+  const { id, fact } = splitFact(f);
+  return { id, fact, old: stateOf("old", f, id), new: stateOf("new", f, id) };
+});
+const quotes = (arm) => evidence.noise[arm].map((q) => ({ id: q.slice(0, q.indexOf(": ")), line: q.slice(q.indexOf(": ") + 2) }));
+
+const rerunFlags = `${level}${judgeModel !== model ? ` --judge-model ${judgeModel}` : ""}`;
+const result = {
+  level,
+  reps,
+  old: { ref: baseRef, label: baseLabel },
+  new: { label: "working tree" },
+  models: { writer: [...seen.writer], judge: [...seen.judge], background: [...seen.background], effort },
+  cost: spent,
+  repliesDir: work,
+  failed,
+  judgeFailed,
+  sample: { prompts: prompts.length, replies: total("old") + total("new"), judgments: pairsJudged * CRITERIA.length },
+  headline: { newWins, oldWins, ties: pairsJudged * CRITERIA.length - newWins - oldWins, wordPct, factsLost: factsLost.map(splitFact), worseCounts: worseCounts.map((r) => r.what.toLowerCase()) },
+  // Sorted by margin, biggest advantage first. null when --no-judge, which is what the
+  // report reads to drop every judge-fed section.
+  judge: useJudge ? CRITERIA.map((c) => ({ key: c, old: wins(c, "old"), new: wins(c, "new"), agreed: agreed[c] ?? null, of: pairsJudged })).sort((x, y) => y.new - y.old - (x.new - x.old)) : null,
+  counts: countRows.filter((r) => r.shown).sort((a, b) => b.old - b.new - (a.old - a.new)).concat(countRows.filter((r) => !r.shown)),
+  lineOne: { old: lineOneOf("old"), new: lineOneOf("new") },
+  prompts: promptRows.map(({ sort, ...p }) => p),
+  regressions,
+  evidence: { facts: evidenceFacts, noise: { old: quotes("old"), new: quotes("new") } },
+  commands: {
+    rerun: `node eval/run.mjs ${rerunFlags}`,
+    rescore: `node eval/run.mjs ${level} --replies ${work}`,
+    rerender: `node eval/report.mjs ${join(work, "result.json")}`,
+  },
+};
+
+// A --no-judge rescore is free and a judged run is not, so an unjudged result never
+// overwrites a judged one for the same replies. It lands beside it instead.
+const resultPath = join(work, "result.json");
+let target = resultPath;
+if (!result.judge && existsSync(resultPath)) {
+  try {
+    if (JSON.parse(readFileSync(resultPath, "utf8")).judge) target = join(work, "result-counts.json");
+  } catch {}
+}
+writeFileSync(target, JSON.stringify(result, null, 2) + "\n");
+if (target !== resultPath) console.log(`kept the judged result.json, wrote this one to ${target}`);
+
+const out = asJson ? JSON.stringify(result, null, 2) : render(result);
 console.log();
-console.log(result);
-if (outFile) writeFileSync(outFile, result + "\n");
+console.log(out);
+if (outFile) writeFileSync(outFile, out + "\n");
