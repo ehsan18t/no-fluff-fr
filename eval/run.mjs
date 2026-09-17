@@ -6,7 +6,8 @@
 //   node eval/run.mjs <tiny|small|medium|large|xl> [options]
 //
 //   --base <ref>         compare against this commit instead of the last release commit
-//   --model <id>         writer model (default: the CLI's default, no pin)
+//   --model <id>         writer model (default: claude-opus-5)
+//   --effort <level>     reasoning effort: low|medium|high|xhigh|max (default: high)
 //   --judge-model <id>   judge model (default: same as --model)
 //   --no-judge           counts only, no judge calls
 //   --reps N             runs per prompt (default: the level's)
@@ -42,7 +43,12 @@ if (!LEVELS[level]) {
 }
 const reps = Number(flag("--reps") ?? LEVELS[level].reps);
 const only = flag("--only")?.split(",");
-const model = flag("--model");
+// The plugin targets Opus 5, so the eval measures on it by default. Override with --model.
+const WRITER_MODEL = "claude-opus-5";
+const model = flag("--model") ?? WRITER_MODEL;
+// Reasoning effort pinned so every session reasons the same. Override with --effort.
+const EFFORT = "high";
+const effort = flag("--effort") ?? EFFORT;
 const judgeModel = flag("--judge-model") ?? model;
 const useJudge = !has("--no-judge");
 const outFile = flag("--out");
@@ -74,6 +80,7 @@ console.log(`no-fluff-fr eval, level ${level}: ${prompts.length} prompts x ${rep
 console.log(`old = ${baseLabel}`);
 console.log(`new = working tree${dirty ? "" : " (no uncommitted change in inject/ or hooks/)"}`);
 console.log(`judge: ${useJudge ? "on, blind, both orders" : "off"}. Estimated cost: about $${estimate.toFixed(2)}`);
+console.log(`writer model: ${model}${useJudge && judgeModel !== model ? `, judge model: ${judgeModel}` : ""}, effort: ${effort}`);
 if (dryRun) {
   console.log(`prompts: ${prompts.map((p) => p.id).join(", ")}`);
   process.exit(0);
@@ -85,7 +92,16 @@ const bin = process.platform === "win32" ? "claude.exe" : "claude";
 const work = repliesDir ?? mkdtempSync(join(tmpdir(), "no-fluff-fr-eval-"));
 const cwd = join(work, "cwd");
 mkdirSync(cwd, { recursive: true });
-const seen = { writer: new Set(), judge: new Set() };
+const seen = { writer: new Set(), judge: new Set(), background: new Set() };
+// The writer is the model that produced the reply text (the most output tokens). Every other
+// model a session bills (a fixed Haiku background call) is background, not the writer.
+const writerOf = (usage) => Object.entries(usage).sort((a, b) => (b[1].outputTokens ?? 0) - (a[1].outputTokens ?? 0))[0]?.[0] ?? "unknown";
+const noteModels = (kind, usage) => {
+  const w = writerOf(usage);
+  seen[kind].add(w);
+  for (const k of Object.keys(usage)) if (k !== w) seen.background.add(k);
+  return w;
+};
 let spent = 0;
 
 function claude(args, input, cwdDir) {
@@ -100,7 +116,7 @@ function claude(args, input, cwdDir) {
         const o = JSON.parse(out);
         if (o.is_error) throw new Error(o.result);
         spent += o.total_cost_usd ?? 0;
-        resolve({ text: o.result, models: Object.keys(o.modelUsage ?? {}) });
+        resolve({ text: o.result, usage: o.modelUsage ?? {} });
       } catch (e) {
         resolve({ error: `exit ${code}: ${String(e.message).slice(0, 160)} ${err.slice(0, 160)}`.trim() });
       }
@@ -134,6 +150,7 @@ if (!repliesDir) {
           jobs.push(async () => {
             const args = ["-p", "--tools", "", "--setting-sources", "", "--output-format", "json", "--no-session-persistence", "--plugin-dir", arms[arm]];
             if (model) args.push("--model", model);
+            if (effort) args.push("--effort", effort);
             const r = await claude(args, p.prompt, cwd);
             if (r.error) {
               failed++;
@@ -141,8 +158,8 @@ if (!repliesDir) {
               replies[arm][p.id][rep - 1] = null;
               return;
             }
-            r.models.forEach((m) => seen.writer.add(m));
-            writeFileSync(join(work, arm, `${p.id}-${rep}.md`), r.text);
+            const writer = noteModels("writer", r.usage);
+            writeFileSync(join(work, arm, `${p.id}-${rep}.md`), `<!-- writer: ${writer} -->\n\n${r.text}`);
             replies[arm][p.id][rep - 1] = r.text;
             console.log(`done ${arm} ${p.id}-${rep}`);
           });
@@ -160,8 +177,15 @@ if (!repliesDir) {
       replies[arm][p.id] = [];
       for (let rep = 1; rep <= reps; rep++) {
         const f = join(work, arm, `${p.id}-${rep}.md`);
-        replies[arm][p.id][rep - 1] = existsSync(f) ? readFileSync(f, "utf8") : null;
-        if (!existsSync(f)) failed++;
+        if (existsSync(f)) {
+          const raw = readFileSync(f, "utf8");
+          const m = raw.match(/^<!-- writer: (.*?) -->\n\n/);
+          if (m) seen.writer.add(m[1]);
+          replies[arm][p.id][rep - 1] = m ? raw.slice(m[0].length) : raw;
+        } else {
+          replies[arm][p.id][rep - 1] = null;
+          failed++;
+        }
       }
     }
   }
@@ -293,6 +317,7 @@ if (useJudge) {
       jobs.push(async () => {
         const args = ["-p", "--tools", "", "--setting-sources", "", "--output-format", "json", "--no-session-persistence"];
         if (judgeModel) args.push("--model", judgeModel);
+        if (effort) args.push("--effort", effort);
         // Order 1: A = old, B = new. Order 2: A = new, B = old. A disagreement is a tie.
         const [r1, r2] = await Promise.all([claude(args, judgePrompt(p, o, n), cwd), claude(args, judgePrompt(p, n, o), cwd)]);
         const j1 = r1.error ? null : parseJudge(r1.text);
@@ -303,7 +328,7 @@ if (useJudge) {
           console.log(`JUDGE FAIL ${p.id}-${rep} ${r1.error ?? ""} ${r2.error ?? ""}`.trim());
           return;
         }
-        [r1, r2].forEach((r) => r.models?.forEach((m) => seen.judge.add(m)));
+        [r1, r2].forEach((r) => noteModels("judge", r.usage ?? {}));
         const toArm1 = (w) => (w === "A" ? "old" : w === "B" ? "new" : "tie");
         const toArm2 = (w) => (w === "A" ? "new" : w === "B" ? "old" : "tie");
         const v = {};
@@ -348,7 +373,11 @@ const lines = [];
 const say = (s = "") => lines.push(s);
 say(`# no-fluff-fr eval: ${level}`);
 say();
-say(`${prompts.length} prompts x ${reps} run${reps > 1 ? "s" : ""} per version, ${total("old")} old and ${total("new")} new replies${failed ? `, ${failed} failed` : ""}. Old = \`${baseLabel}\`. New = working tree. Writer model: ${[...seen.writer].join(", ") || "unknown"}. Judge: ${useJudge ? `${[...seen.judge].join(", ") || "unknown"}, blind, both orders, a disagreement counts as a tie${judgeFailed ? `, ${judgeFailed} pair${judgeFailed > 1 ? "s" : ""} failed` : ""}` : "off"}. Cost: $${spent.toFixed(2)}. Replies: ${work}`);
+say(`${prompts.length} prompts x ${reps} run${reps > 1 ? "s" : ""} per version, ${total("old")} old and ${total("new")} new replies${failed ? `, ${failed} failed` : ""}. Old = \`${baseLabel}\`. New = working tree. Writer model: ${[...seen.writer].join(", ") || "unknown"}${seen.background.size ? ` (background: ${[...seen.background].join(", ")})` : ""}, effort ${effort}. Judge: ${useJudge ? `${[...seen.judge].join(", ") || "unknown"}, blind, both orders, a disagreement counts as a tie${judgeFailed ? `, ${judgeFailed} pair${judgeFailed > 1 ? "s" : ""} failed` : ""}` : "off"}. Cost: $${spent.toFixed(2)}. Replies: ${work}`);
+if (seen.writer.size > 1) {
+  say();
+  say(`**WARNING:** the writer model varied across sessions (${[...seen.writer].join(", ")}). A comparison is valid only on one writer model. Pin it with --model.`);
+}
 say();
 say("## Counts (a script counted these)");
 say();

@@ -32,6 +32,12 @@ Two ways, because each catches what the other cannot.
 
 **Judge.** A second headless Claude gets the request, the facts, the must-have list and the two replies labeled A and B, without knowing which is old, and names the better one on five criteria: complete, no noise, skimmable, readable, line one does its job. Each pair is judged twice with the labels swapped, and a disagreement counts as a tie, which removes the judge's habit of favoring the first reply. It quotes the missing facts and the noise lines it saw, so a verdict can be checked in seconds. A judge's verdict can move by one between runs. The counts do not. That is why both are printed.
 
+## Which model runs, and how it is reported
+
+Both arms run on the same writer model, so the model is never a variable in an old-versus-new comparison. The default is `claude-opus-5`, because the plugin exists to improve Opus 5's output, so the eval measures replies on Opus 5. Pass `--model <id>` to test another model, and `--judge-model <id>` to judge with a different one. The judge defaults to the writer model. Reasoning effort is pinned to `high` for every session, so the model reasons the same in each. Pass `--effort <level>` (low, medium, high, xhigh, max) to change it.
+
+Every `claude` session also bills a small fixed background model (Haiku) for internal work, which is not the writer. The result header prints the writer separately from that background model, choosing the writer as the model that produced the reply text (the most output tokens). Each saved reply file begins with a `<!-- writer: <id> -->` line, so opening a reply tells you which model wrote it. If the writer is ever not the same across all sessions, for example an Opus overload fell back to a smaller model, the run prints a WARNING, because a mixed-model comparison is invalid.
+
 ## Levels
 
 | Level | Prompts | Runs each | Replies per version | Cost, both versions, judge on |
@@ -62,7 +68,8 @@ Each prompt in `prompts.json` has a tier, and a level runs every prompt whose ti
 
 ```text
 --base <ref>        compare against this commit instead of the last release
---model <id>        writer model (default: the CLI's default, nothing is pinned)
+--model <id>        writer model (default: claude-opus-5)
+--effort <level>    reasoning effort: low, medium, high, xhigh, max (default: high)
 --judge-model <id>  judge model (default: same as the writer)
 --no-judge          counts only
 --reps N            runs per prompt
