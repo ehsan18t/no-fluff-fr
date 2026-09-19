@@ -61,32 +61,34 @@ Both hooks run `cat` on a file in the plugin directory. There is no Node or othe
 
 ## Does it work
 
-The rules of 0.2.1 against the rules of 0.3.0, same prompts, same model, same isolation, 8 prompts x 2 replies per side. Every pair is judged twice with the labels swapped, and the judge is never told which side is which.
+No plugin, the rules of 0.3.0 and the rules of 0.4.0, on the same 5 prompts, the same model and the same empty sandbox. Two judges grade every reply alone on seven questions, and a fail has to quote the line.
 
-| | 0.2.1 | 0.3.0 |
-|---|---|---|
-| Blind judgments won | 13 | **36** |
-| Replies you can skim to the point | 0 of 16 | **12 of 16** |
-| Bullets with no label or code | 34 | **0** |
-| Facts the reply had to state and did not | 3 | **0** |
-| Phrases offering to do more | 4 | **9** |
+|                                                 | No plugin | Rules 0.3.0 | Rules 0.4.0 |
+| ----------------------------------------------- | --------- | ----------- | ----------- |
+| Tests passed, of 35                             | 24        | 31          | **33**      |
+| Replies free of offers, of 5                    | 2         | **4**       | **4**       |
+| Replies where every line is worth reading, of 5 | 1         | **4**       | **4**       |
+| Replies stating every needed fact, of 5         | 4         | 3           | **5**       |
+| Must-have facts missed                          | 2         | 2           | **0**       |
+| Bullets with no label or code                   | 4         | **0**       | **0**       |
+| Words per reply, median                         | 162       | **91**      | 119         |
 
-The last row is a regression and it is here because hiding it would make the rest worth less. Replies also came out 7% longer, driven by two prompts. Neither the length nor the noise score separates the two versions: the judge split 8 to 7 on whether every line was worth reading, with both passes agreeing on all 16 pairs.
+The last row is the cost: 0.4.0 stops dropping facts and its replies are longer for it. Both judges agreed on 99 of 105 tests.
 
-Written by `claude-opus-5` at reasoning effort `high` on both sides, so the model is never the variable. Judged by `claude-fable-5-1`, a different model from the writer, so a blind spot the writer has is not grading itself. Both are defaults you can change with `--model`, `--effort` and `--judge-model`.
+Written by `claude-opus-5` at reasoning effort `high` for every reply, so the model is never the variable. Graded by `claude-fable-5-1`, a different model from the writer, so the judge does not share the writer's blind spots. `--model`, `--effort` and `--judge-model` change them.
 
-Full result, including the quoted lines behind every number: [eval/RESULT.md](eval/RESULT.md). It is one run, so read a margin of 1 as a coin flip.
+Full result, including the quoted lines behind every number: [eval/RESULT.md](eval/RESULT.md). It is one run of five prompts, so read a gap of one as chance.
 
 ## Requirements and platform status
 
 No runtime. Claude Code (CLI or VS Code extension) is the only requirement. On Windows, Claude Code runs the hooks in PowerShell 5.1 or later, or in Git Bash when Git for Windows is installed. On macOS and Linux it uses your default shell. All of them have `cat`.
 
-| Setup                     | Status                                                                                                                                      |
-| ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
+| Setup                     | Status                                                                                                                                     |
+| ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
 | Windows, CLI              | Verified: new session, resume, fork, clear, compact, reminder on every prompt, Node absent from PATH, and the same hook under PowerShell 7 |
-| macOS, CLI                | Not verified                                                                                                                                |
-| Linux, CLI                | Not verified                                                                                                                                |
-| VS Code extension, any OS | Not verified                                                                                                                                |
+| macOS, CLI                | Not verified                                                                                                                               |
+| Linux, CLI                | Not verified                                                                                                                               |
+| VS Code extension, any OS | Not verified                                                                                                                               |
 
 If the rules seem missing on your setup, run `claude --debug` and look for the `SessionStart` hook result, or open `/hooks`.
 
@@ -105,11 +107,10 @@ node --test scripts/check.test.mjs
 
 ## Testing a rule change
 
-One command runs the same prompts with the last release's rules and with the working tree's rules, in fresh headless sessions, counts what a script can count, lets a blind judge compare each pair, and prints one result. It writes `result.json` beside the replies and, after a whole judged level, replaces [eval/RESULT.md](eval/RESULT.md). Each run spends real usage on your account, so `--dry-run` prints the plan first.
+One command runs the same prompts with no plugin, with the last release's rules and with the working tree's rules (or, while `inject/` is unchanged since the last release, with the two latest releases), in fresh headless sessions, counts what a script can count, has two judges pass or fail every reply on seven questions, and prints one result. It writes `result.json` beside the replies and, after a whole judged level, replaces [eval/RESULT.md](eval/RESULT.md). Each run spends real usage on your account and prints the tokens it used.
 
 ```bash
 node eval/run.mjs small        # tiny | small | medium | large | xl
-node eval/run.mjs small --dry-run
 node eval/report.mjs <result.json>   # re-render any past run, no sessions
 ```
 
