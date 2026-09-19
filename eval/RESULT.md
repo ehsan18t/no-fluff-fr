@@ -1,109 +1,123 @@
-# no-fluff-fr rules benchmark
+# no-fluff-fr benchmark
 
-```
-  OLD   ee12074 chore(plugin): release 0.2.1
-  NEW   0.3.0
+- **Date:** 2026-09-19
+- **Compared:** no plugin, rules 0.3.0, rules 0.4.0
+- **Prompts:** 5, one reply each, 15 replies
+- **Writer:** claude-opus-5 at effort high, for every reply
+- **Judge:** claude-fable-5-1, 2 judges per test
+- **Usage, judge:** 30 sessions, 10k tokens out, 352k in, 133k of them cached
+- **Replies:** no-fluff-fr-eval-AwIgf0
 
-  sample   8 prompts x 2 per arm  =  32 replies, 80 blind judgments
-  writer   claude-opus-5, effort high   (both arms, same model)
-  judge    claude-fable-5-1, blind, both label orders
-  replies  no-fluff-fr-eval-nE2gze
-  ran      2026-09-18
-```
+## 1. Summary
 
-**New wins 36 blind judgments, loses 13, ties 31. Replies are 7% longer. No fact the old rules stated went missing. 4 counts got worse: offer phrases, headings over 3 words or with a bracketed letter, code letters not matching their heading, words per reply, median.**
+- Tests passed, of 35 per column: no plugin 24, rules 0.3.0 31, rules 0.4.0 33.
+- Median reply: 162 words with no plugin, 91 with rules 0.3.0, 119 with rules 0.4.0.
+- Regressions against rules 0.3.0: 5.
+- Regressions against no plugin: 1.
+- Both judges agreed on 99 of 105 tests.
 
-## 1. Quality: what a blind judge picked
+## 2. Judge
 
-| The judge's question | Old won | New won | Both judges agreed |
+| Question | No plugin | Rules 0.3.0 | Rules 0.4.0 |
 |---|---|---|---|
-| **Skimmable**<br>Can you find the point without reading it all? | 0 of 16 | 12 of 16 | 12 of 16 |
-| **Complete**<br>Is every fact needed to act on it there? | 0 of 16 | 5 of 16 | 8 of 16 |
-| **Line one**<br>Does the first line answer? | 2 of 16 | 6 of 16 | 13 of 16 |
-| **Readable**<br>Does each sentence read once? | 3 of 16 | 6 of 16 | 11 of 16 |
-| **Noise**<br>Is every line worth reading? | 8 of 16 | 7 of 16 | 16 of 16 |
+| **Complete**<br>Is every fact needed to act on it there? | 4 [4] | 3 [3] | 5 [5] |
+| **Noise**<br>Is every line worth reading? | 1 [4] | 4 [5] | 4 [4] |
+| **Skimmable**<br>Can you find the point without reading it all? | 3 [4] | 5 [5] | 5 [5] |
+| **Readable**<br>Does each sentence read once? | 5 [5] | 5 [5] | 5 [5] |
+| **Line one**<br>Does the first line answer? | 4 [5] | 5 [5] | 5 [5] |
+| **Extras**<br>Does each extra name the change and stop? | 5 [5] | 5 [5] | 5 [5] |
+| **Offers**<br>Is the reply free of offers? | 2 [5] | 4 [5] | 4 [5] |
 
-## 2. Form: what a script counted
+- Tests per question: 5
+- Judges per test: 2
+- `X [Y]`: X tests passed, Y where all judges agreed
 
-| What is counted | Target | Old | New | |
+## 3. Counts
+
+| Counted by a script | Target | No plugin | Rules 0.3.0 | Rules 0.4.0 |
 |---|---|---|---|---|
-| Line one is a single sentence | 14 of 14 | 2 of 14 | 3 of 14 | `+1` |
-| Bullets with no bold label or code | 0 | 34 | 0 | `-34` |
-| Must-have facts missed | 0 | 3 | 0 | `-3` |
-| Jargon copied from the prompt's notes | lower | 9 | 6 | `-3` |
-| Sentences over 25 words | 0 | 7 | 5 | `-2` |
-| Headings over 3 words or with a bracketed letter | 0 | 0 | 1 | `+1 worse` |
-| Code letters not matching their heading | 0 | 0 | 2 | `+2 worse` |
-| Words per reply, median | lower | 66.5 | 71 | `+7% worse` |
-| Offer phrases | 0 | 4 | 9 | `+5 worse` |
+| Replies whose line one is one sentence | 4 of 4 | 0 | 2 | 2 |
+| Must-have facts missed | 0 | 2 | 2 | 0 |
+| Bullets with no bold label or code | 0 | 4 | 0 | 0 |
+| Noise lines kept | 0 | 5 | 3 | 3 |
+| Headings over one item | 0 | 0 | 1 | 1 |
+| Sentences over 25 words | 0 | 1 | 1 | 1 |
+| Semicolons | 0 | 1 | 0 | 0 |
+| Noise lines the judges found | 0 | 14 | 1 | 1 |
+| Jargon copied from the prompt's notes | lower | 2 | 1 | 2 |
+| Offers the judges found | 0 | 4 | 1 | 2 |
+| Words per reply, median | lower | 162 | 91 | 119 |
 
-Already 0 in both arms, unchanged: semicolons.
+Already 0 everywhere: headings over 3 words or with a bracketed letter, code letters not matching their heading, badly written extras the judges found.
 
-## 3. Prompt by prompt
+## 4. Per prompt
 
-| Prompt | Words | Facts missed | Line one | Judge, old / new |
+| Prompt | Words | Facts missed | Noise kept | Tests passed, of 7 |
 |---|---|---|---|---|
-| `small-1` | 24 -> 19 `-21%` | 1 -> 0 | yes -> no | 0 / 5 |
-| `ask-rename-2` | 100 -> 70 `-30%` | 0 -> 0 | no -> yes | 0 / 4 |
-| `amend-release-2` | 56 -> 64 `+14% worse` | 0 -> 0 | no -> no | 0 / 4 |
-| `ask-rename-1` | 101 -> 81 `-20%` | 0 -> 0 | no -> yes | 0 / 3 |
-| `small-2` | 30 -> 19 `-37%` | 0 -> 0 | no -> no | 0 / 2 |
-| `explain-leak-1` | 228 -> 189 `-17%` | 0 -> 0 | n/a -> n/a | 1 / 3 |
-| `copy-rules-1` | 47 -> 93 `+98% worse` | 0 -> 0 | no -> no | 1 / 3 |
-| `copy-rules-2` | 46 -> 113 `+146% worse` | 0 -> 0 | no -> no | 1 / 3 |
-| `medium-1` | 48 -> 66 `+38% worse` | 1 -> 0 | yes -> no | 1 / 2 |
-| `medium-2` | 64 -> 60 `-6%` | 1 -> 0 | no -> yes | 1 / 2 |
-| `explain-leak-2` | 221 -> 187 `-15%` | 0 -> 0 | n/a -> n/a | 1 / 2 |
-| `rename-key-1` | 69 -> 69 `same` | 0 -> 0 | no -> no | 1 / 1 |
-| `rename-key-2` | 70 -> 72 `+3% worse` | 0 -> 0 | no -> no | 1 / 1 |
-| `large-1` | 206 -> 208 `+1% worse` | 0 -> 0 | no -> no | 1 / 0 |
-| `amend-release-1` | 61 -> 61 `same` | 0 -> 0 | no -> no | 2 / 1 |
-| `large-2` | 187 -> 215 `+15% worse` | 0 -> 0 | no -> no | 2 / 0 |
+| `medium` | 161 / 90 / 82 | 1 / 1 / 0 | 4 / 2 / 2 | 4 / 5 / 6 |
+| `large` | 415 / 262 / 286 | 0 / 1 / 0 | 1 / 1 / 1 | 4 / 5 / 6 |
+| `small` | 51 / 29 / 32 | 1 / 0 / 0 | none listed | 6 / 7 / 7 |
+| `ask-rename` | 162 / 91 / 119 | 0 / 0 / 0 | none listed | 4 / 7 / 7 |
+| `explain-leak` | 324 / 235 / 218 | 0 / 0 / 0 | none listed | 6 / 7 / 7 |
 
-## 4. Regressions
+- Each cell: no plugin / rules 0.3.0 / rules 0.4.0.
 
-- **Offer phrases**: 4 -> 9 across all replies. Target is 0.
-- **Headings over 3 words or with a bracketed letter**: 0 -> 1 across all replies. Target is 0.
-- **Code letters not matching their heading**: 0 -> 2 across all replies. Target is 0.
-- **Words per reply, median**: 66.5 -> 71 across all replies. Target is lower.
-- **`large-1`**: the old rules won 1 criteria to 0.
-- **`amend-release-1`**: the old rules won 2 criteria to 1.
-- **`large-2`**: the old rules won 2 criteria to 0.
+## 5. Regressions
 
-## 5. Evidence
+Against rules 0.3.0:
 
-Facts a reply should have stated.
+- Jargon copied from the prompt's notes: 1 with rules 0.3.0, 2 with rules 0.4.0. Target is lower.
+- Words per reply, median: 91 with rules 0.3.0, 119 with rules 0.4.0. Target is lower.
+- Offers the judges found: 1 with rules 0.3.0, 2 with rules 0.4.0. Target is 0.
+- `medium`: rules 0.4.0 kept a line not worth reading, by one judge of two: "- **E2:** I updated the `list` help text and the README command table.". Rules 0.3.0 has none.
+  - Judge: "The help text and README updates are routine parts of the requested change that the developer would not act on or decide from."
+- `large`: rules 0.4.0 fails Offers on "**Split it into its own commit (recommended).** It changes token lifetime at", "Should the E1 token fix stay in `a91c4e7`?". Rules 0.3.0 passes.
+  - Judge: "The developer did not ask for a question, and the closing options hint that the assistant can split the fix into its own commit so it can be reverted separately."
 
-| Prompt | Fact | Old | New |
-|---|---|---|---|
-| `small-1` | README.md line 13 now says install | **missed** | kept |
-| `medium-1` | tests: 212 pass, 3 new | **missed** | kept |
-| `medium-2` | tests: 212 pass, 3 new | **missed** | kept |
+Against no plugin:
 
-Noise the old rules left in (5 of 27).
+- Headings over one item: 0 with no plugin, 1 with rules 0.4.0. Target is 0.
 
-| Prompt | Line |
-|---|---|
-| `small-2` | since changelog entries usually stay frozen |
-| `small-1` | since you asked about the README |
-| `medium-2` | No other command has a --json flag, so this sets the convention |
-| `medium-2` | Help text and README command table updated. |
-| `large-1` | D3 Used ioredis, already a dependency for the queue. |
+## 6. Evidence
 
-Noise the new rules left in (5 of 44).
+Must-have facts and who stated them.
 
-| Prompt | Line |
-|---|---|
-| `medium-1` | Help text and README command table updated. |
-| `medium-1` | no other command has --json, so this sets the shape |
-| `medium-1` | one pre-existing warning in src/cli/format.ts, untouched |
-| `medium-1` | Lint: one pre-existing warning in src/cli/format.ts, untouched. |
-| `medium-1` | Revert if you want the two views identical. |
+| Prompt | Fact | No plugin | Rules 0.3.0 | Rules 0.4.0 |
+|---|---|---|---|---|
+| `medium` | not tested on Windows | **missed** | **missed** | stated |
+| `large` | the rate limiter is still in-memory | stated | **missed** | stated |
 
-## 6. Before you act on this
+Noise lines and who kept them.
 
-- 8 prompts at 2 replies each. A margin of 1 is a coin flip. A margin of 2 or more in the same direction is a result.
-- Both arms ran the same writer model, the same prompts and the same isolation. Only the rules differ.
-- claude-fable-5-1 judged, claude-opus-5 wrote. Different models, so a shared blind spot is not scoring itself.
-- Re-run it: `node eval/run.mjs medium --judge-model claude-fable-5-1`. Score these same replies again without regenerating them: `node eval/run.mjs medium --replies <the replies folder>`.
-- Re-render this report from the saved result: `node eval/report.mjs <the replies folder>/result.json`.
+| Prompt | Line | No plugin | Rules 0.3.0 | Rules 0.4.0 |
+|---|---|---|---|---|
+| `medium` | the help text and the README command table were updated | **kept** | **kept** | **kept** |
+| `medium` | the lint warning that was already there | **kept** | **kept** | **kept** |
+| `large` | the grep over 31 call sites | **kept** | **kept** | **kept** |
+
+Lines the judge failed, rules 0.3.0 (4).
+
+| Prompt | Question | Line |
+|---|---|---|
+| `medium` | Offers | Say if you want it removed. |
+| `medium` | Complete | Not tested on Windows |
+| `large` | Noise | Next: confirm `REDIS_URL` is set in production. |
+| `large` | Complete | Rate limiter in src/middleware/ratelimit.ts still uses in-memory map, left unchanged |
+
+Lines the judge failed, rules 0.4.0 (3).
+
+| Prompt | Question | Line |
+|---|---|---|
+| `medium` | Noise | - **E2:** I updated the `list` help text and the README command table. |
+| `large` | Offers | Should the E1 token fix stay in `a91c4e7`? |
+| `large` | Offers | **Split it into its own commit (recommended).** It changes token lifetime at |
+
+## 7. Caveats
+
+- 5 prompts, one reply each: one result either way is chance, a gap across most rows is a result.
+- Same writer model, same prompts, same empty sandbox for every reply. Only the rules differ.
+- No plugin is the bare model in that sandbox, not your own setup.
+- The judge is a different model from the writer, so it does not share the writer's blind spots.
+- Re-run: `node eval/run.mjs small --judge-model claude-fable-5-1`
+- Grade these same replies again: `node eval/run.mjs small --replies <the replies folder>`
+- Re-render from the saved result: `node eval/report.mjs <the replies folder>/result.json`
