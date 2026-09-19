@@ -3,12 +3,25 @@
 Newest first. 0.1.0 predates this file.
 
 <!--
-A release is one commit: this entry plus the version in .claude-plugin/plugin.json, message "chore(plugin): release X.Y.Z". Installed copies update only when the version changes.
+A release is one commit: this entry plus the version in .claude-plugin/plugin.json, message "chore(plugin): release X.Y.Z", tagged X.Y.Z (git tag X.Y.Z, numbers and dots, no "v"). The eval finds releases by that tag. Installed copies update only when the version changes.
 Write the entry from git log <previous release>..HEAD, the commit bodies and the task ledgers, never from memory. Find the previous release with git log --grep="release [0-9]".
 One sentence per change a plugin user can notice, under Added, Changed, Fixed, Removed in that order, empty headings omitted. A fix to unreleased work folds into its feature. Refactors, tests, the eval harness and docs get no line.
 Version: patch for fixes to released behavior, minor for anything added, removed or a reversed decision, major for a break to existing installs.
 Never rewrite a released entry, correct it in the next one. No em dashes, no hard wraps.
 -->
+
+## 0.4.0 - 2026-09-19
+
+### Changed
+
+- The rules speak as you: "I" and "me" in place of "the reader".
+- Replies make no offer of any kind, neither more work nor a way to undo something.
+- A change you did not ask for is marked once, by an Extras heading or an Extra label, says what changed and stops.
+- A task report keeps what was not tested or left undone, and drops confirmations of what stayed unchanged.
+- A section holds two items or more, so a single item gets a label and no heading.
+- A closing next action is left out when a line above already says it.
+- Two sections are renamed to say what they hold: What to keep, what to cut, and When you finish a task.
+- The task report example has a new topic, shows an extra and no longer ends in a next line.
 
 ## 0.3.0 - 2026-09-18
 
