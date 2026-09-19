@@ -3,9 +3,12 @@
 // That is the point. Every number is produced by run.mjs and is never recomputed here,
 // so a change to the wording of the report can never move a result.
 //
-// Everything a person would want to reword lives in the wording block below. The rest
-// is assembly, and it only walks the object run.mjs hands it (see its `result` builder
-// for the shape).
+// The report is read by people who did not run it, so it uses their words: a test is
+// one reply graded on one question, a column is one of no plugin, the old rules and
+// the new rules, and every line carries one fact. Everything a person would want to
+// reword lives in the wording block below and in the wording helpers of render. The
+// rest is assembly, and it only walks the object run.mjs hands it (see its `result`
+// builder for the shape).
 //
 //   import { render } from "./report.mjs";  ->  render(result) returns markdown
 //   node eval/report.mjs <result.json>      ->  re-renders a saved run, free
@@ -23,23 +26,24 @@ export const CRITERION_TEXT = {
   skimmable: ["Skimmable", "Can you find the point without reading it all?"],
   readable: ["Readable", "Does each sentence read once?"],
   lineOne: ["Line one", "Does the first line answer?"],
+  extras: ["Extras", "Does each extra name the change and stop?"],
+  offers: ["Offers", "Is the reply free of offers?"],
 };
 
-export const TITLE = "no-fluff-fr rules benchmark";
+export const TITLE = "no-fluff-fr benchmark";
 
 export const SECTIONS = {
-  judge: "Quality: what a blind judge picked",
-  counts: "Form: what a script counted",
-  prompts: "Prompt by prompt",
+  summary: "Summary",
+  judge: "Judge",
+  counts: "Counts",
+  prompts: "Per prompt",
   regressions: "Regressions",
   evidence: "Evidence",
-  caveats: "Before you act on this",
+  caveats: "Caveats",
 };
 
-// Noise quotes printed per arm. The rest stay in the result object for anyone who wants them.
+// Quoted lines printed per column. The rest stay in the result object for anyone who wants them.
 export const EVIDENCE_CAP = 5;
-
-export const NO_REGRESSIONS = "None. No count got worse, no fact the old rules stated went missing, and no prompt favoured the old rules.";
 
 // ---------------------------------------------------------------------------- cells
 
@@ -48,15 +52,13 @@ const NEWLINES = new RegExp("[\\r\\n]+", "g");
 // A pipe inside a model-written quote would split the row into extra columns, so it
 // becomes the entity that renders as a pipe.
 const cell = (s) => String(s).replace(NEWLINES, " ").split("|").join("&#124;").trim();
+// Outside a table a pipe is harmless, but a newline would end the bullet.
+const flat = (s) => String(s).replace(NEWLINES, " ").trim();
 const code = (s) => "`" + s + "`";
-const delta = (o, n, higherBetter = false) => {
-  if (n === o) return code("same");
-  const d = n - o;
-  return code(`${d > 0 ? "+" : ""}${d}${(higherBetter ? d > 0 : d < 0) ? "" : " worse"}`);
-};
-// Lower is better for every percentage printed here, so a rise is always a regression.
-const pct = (p) => (p === 0 ? code("same") : code(p > 0 ? `+${p}% worse` : `${p}%`));
 const plural = (n, one, many) => (n === 1 ? one : many);
+// 41k, 1.2M: a token count a reader can hold, not a number they have to parse.
+const tokens = (n) => (n >= 999500 ? `${(n / 1e6).toFixed(1)}M` : n >= 1000 ? `${Math.round(n / 1000)}k` : String(n));
+const criterion = (key) => (CRITERION_TEXT[key] ?? [key])[0];
 
 // ---------------------------------------------------------------------------- render
 
@@ -72,101 +74,210 @@ export function render(r, { dir } = {}) {
   const say = (s = "") => out.push(s);
   let n = 0;
   const section = (title) => { say(); say(`## ${++n}. ${title}`); say(); };
-  const fence = "```";
+  // The no-plugin column is optional (--no-baseline, or a rescore of a run without it),
+  // so every column and line that belongs to it appears only when the result carries it.
+  const none = Boolean(r.none);
+  const cols = none ? ["none", "old", "new"] : ["old", "new"];
+  // Column names come from the run: "rules 0.2.1" when the old label names a release,
+  // "rules 0.3.0" or "rules 4f7ac11" from the new label (a version, or the HEAD hash of
+  // rules not released yet), "old rules" and "new rules" otherwise.
+  // A result from before run.mjs recorded old.version names its release in the label only.
+  const oldVersion = r.old.version ?? /^\S+ chore\(plugin\): release (\S+)$/.exec(String(r.old.label ?? ""))?.[1];
+  const newVersion = r.new.label && r.new.label !== "working tree" ? r.new.label : null;
+  const name = { none: "no plugin", old: oldVersion ? `rules ${oldVersion}` : "old rules", new: newVersion ? `rules ${newVersion}` : "new rules" };
+  const Name = (k) => name[k][0].toUpperCase() + name[k].slice(1);
+  // Where a column's rules came from, said only when its name does not: a release is
+  // named by its version, so a hash is printed only for an old commit that is no release.
+  const source = { old: oldVersion ? "" : ` (commit ${String(r.old.label).split(" ")[0]})`, new: r.new.ref ? "" : " (working tree)" };
+  // A result judged in pairs, before 2026-09-19, has no grades: its judge sections are
+  // left out and one line says so.
+  const pairwise = r.headline?.newWins !== undefined;
+  const judged = Boolean(r.judge) && !pairwise;
+  const rounds = r.judgeRounds ?? 1;
+  const h = r.headline;
+  const reg = r.regressions;
 
   say(`# ${TITLE}`);
   say();
-  say(fence);
-  say(`  OLD   ${r.old.label}`);
-  say(`  NEW   ${r.new.label}`);
-  say("");
-  say(`  sample   ${r.sample.prompts} ${plural(r.sample.prompts, "prompt", "prompts")} x ${r.reps} per arm  =  ${r.sample.replies} replies${r.judge ? `, ${r.sample.judgments} blind judgments` : ""}${r.failed ? `, ${r.failed} failed` : ""}`);
-  say(`  writer   ${r.models.writer.join(", ") || "unknown"}, effort ${r.models.effort}   ${r.models.writer.length > 1 ? "(VARIED, see the warning below)" : "(both arms, same model)"}`);
-  say(`  judge    ${r.judge ? `${r.models.judge.join(", ") || "unknown"}, blind, both label orders${r.judgeFailed ? `, ${r.judgeFailed} ${plural(r.judgeFailed, "pair", "pairs")} failed` : ""}` : "off"}`);
-  // No cost line. What a run bills is the reader's own account and their business,
-  // not a number this report has any standing to put in front of them.
-  say(`  replies  ${dir ?? r.replies}`);
-  if (r.ranAt) say(`  ran      ${r.ranAt}`);
-  say(fence);
-  if (r.models.writer.length > 1) {
-    say();
-    say(`**WARNING:** the writer model varied across sessions (${r.models.writer.join(", ")}). A comparison is valid only on one writer model. Pin it with --model.`);
-  }
-
-  const h = r.headline;
-  const head = [];
-  if (r.judge) head.push(`New wins ${h.newWins} blind judgments, loses ${h.oldWins}, ties ${h.ties}.`);
-  head.push(h.wordPct === 0 ? "Replies are the same length." : `Replies are ${Math.abs(h.wordPct)}% ${h.wordPct < 0 ? "shorter" : "longer"}.`);
-  head.push(h.factsLost.length ? `${h.factsLost.length} ${plural(h.factsLost.length, "fact", "facts")} the old rules stated went missing.` : "No fact the old rules stated went missing.");
-  head.push(h.worseCounts.length ? `${h.worseCounts.length} ${plural(h.worseCounts.length, "count", "counts")} got worse: ${h.worseCounts.join(", ")}.` : "No count got worse.");
-  say();
-  say(`**${head.join(" ")}**`);
-
-  if (r.judge) {
-    section(SECTIONS.judge);
-    say("| The judge's question | Old won | New won | Both judges agreed |");
-    say("|---|---|---|---|");
-    for (const c of r.judge) {
-      const [name, question] = CRITERION_TEXT[c.key] ?? [c.key, ""];
-      say(`| **${name}**<br>${question} | ${c.old} of ${c.of} | ${c.new} of ${c.of} | ${c.agreed == null ? "n/a" : `${c.agreed} of ${c.of}`} |`);
+  if (r.ranAt) say(`- **Date:** ${r.ranAt}`);
+  say(`- **Compared:** ${none ? "no plugin, " : ""}${name.old}${source.old}, ${name.new}${source.new}`);
+  say(`- **Prompts:** ${r.sample.prompts}, ${r.reps === 1 ? "one reply" : `${r.reps} replies`} each, ${r.sample.replies} replies${r.failed ? `, ${r.failed} failed` : ""}`);
+  say(`- **Writer:** ${r.models.writer.join(", ") || "unknown"} at effort ${r.models.effort}, for every reply${r.models.writer.length > 1 ? ". VARIED across sessions, so this comparison is not valid; pin it with --model" : ""}`);
+  say(`- **Judge:** ${r.judge ? `${r.models.judge.join(", ") || "unknown"}, ${pairwise ? "compared replies in pairs" : `${rounds} ${plural(rounds, "judge", "judges")} per test`}${r.judgeFailed ? `, ${r.judgeFailed} ${plural(r.judgeFailed, "session", "sessions")} failed` : ""}` : "off"}`);
+  // Tokens, not dollars: prices change and a subscription has no dollar figure, while
+  // both kinds of reader can weigh tokens. Output apart from input, because output
+  // carries the thinking and input is mostly cache reads of the system prompt. An
+  // older result has no usage and gets no line.
+  if (r.usage) {
+    const roles = ["writer", "judge"].filter((k) => r.usage[k]?.sessions);
+    if (!roles.length) say("- **Usage:** none, no session finished");
+    for (const k of roles) {
+      const u = r.usage[k];
+      say(`- **Usage, ${k}:** ${u.sessions} sessions, ${tokens(u.output)} tokens out, ${tokens(u.input + u.cacheRead + u.cacheCreate)} in, ${tokens(u.cacheRead)} of them cached`);
     }
+  }
+  say(`- **Replies:** ${dir ?? r.replies}`);
+
+  section(SECTIONS.summary);
+  if (judged) {
+    const c = h.checks;
+    // A column's denominator is printed only when it differs from the new rules', which
+    // happens when a session failed there.
+    say(`- Tests passed, of ${c.new.of} per column: ${cols.map((k) => `${name[k]} ${c[k].pass}${c[k].of === c.new.of ? "" : ` of ${c[k].of}`}`).join(", ")}.`);
+  }
+  if (h.words) say(`- Median reply: ${cols.map((k, i) => `${h.words[k]}${i === 0 ? " words" : ""} with ${name[k]}`).join(", ")}.`);
+  if (reg && !Array.isArray(reg)) {
+    say(`- Regressions against ${name.old}: ${reg.old.length || "none"}.`);
+    if (reg.none) say(`- Regressions against no plugin: ${reg.none.length || "none"}.`);
+  } else if (Array.isArray(reg)) say(`- Regressions: ${reg.length || "none"}.`);
+  if (judged && h.disagreed && rounds > 1) say(h.disagreed.count ? `- ${rounds === 2 ? "Both" : "All"} judges agreed on ${h.disagreed.of - h.disagreed.count} of ${h.disagreed.of} tests.` : `- ${rounds === 2 ? "Both" : "All"} judges agreed on every test.`);
+
+  if (judged) {
+    section(SECTIONS.judge);
+    // One cell per column, `X [Y]`: X tests passed in every grading, Y tests where every
+    // grading gave the same answer. A cell carries its own denominator only when a
+    // failed session shrank it.
+    const passCell = (row, k) => `${row.passes[k]}${row.graded[k] === row.of ? "" : ` of ${row.graded[k]}`}${rounds > 1 ? ` [${row.agreed[k]}]` : ""}`;
+    say(`| Question |${cols.map((k) => ` ${Name(k)} |`).join("")}`);
+    say(`|---|${cols.map(() => "---|").join("")}`);
+    for (const row of r.judge) {
+      const [label, question] = CRITERION_TEXT[row.key] ?? [row.key, ""];
+      say(`| **${label}**<br>${question} |${cols.map((k) => ` ${passCell(row, k)} |`).join("")}`);
+    }
+    const first = r.judge[0];
+    if (first) {
+      say();
+      say(`- Tests per question: ${first.of}`);
+      if (rounds > 1) say(`- Judges per test: ${rounds}`);
+      if (rounds > 1) say(`- ${code("X [Y]")}: X tests passed, Y where all judges agreed`);
+      else say("- A cell is how many tests passed");
+    }
+  } else if (pairwise) {
+    section(SECTIONS.judge);
+    say(`This run was judged in pairs, before 2026-09-19, so it has no grades. Grade its replies again: ${code(withDir(r.commands.rescore))}.`);
   }
 
   section(SECTIONS.counts);
-  say("| What is counted | Target | Old | New | |");
-  say("|---|---|---|---|---|");
+  say(`| Counted by a script | Target |${cols.map((k) => ` ${Name(k)} |`).join("")}`);
+  say(`|---|---|${cols.map(() => "---|").join("")}`);
   const l = r.lineOne;
-  // Denominators diverge only when a reply failed, and two hit counts over different
-  // denominators do not compare, so the cell says so rather than inventing a delta.
-  say(`| Line one is a single sentence | ${l.new.of} of ${l.new.of} | ${l.old.hit} of ${l.old.of} | ${l.new.hit} of ${l.new.of} | ${l.old.of === l.new.of ? delta(l.old.hit, l.new.hit, true) : code("n/a")} |`);
-  for (const c of r.counts.filter((c) => c.shown)) say(`| ${c.what} | ${c.target} | ${c.old} | ${c.new} | ${c.pct ? pct(h.wordPct) : delta(c.old, c.new)} |`);
+  say(`| Replies whose line one is one sentence | ${l.new.of} of ${l.new.of} |${cols.map((k) => ` ${l[k] ? l[k].hit : "n/a"} |`).join("")}`);
+  for (const c of r.counts.filter((c) => c.shown)) say(`| ${c.what} | ${c.target} |${cols.map((k) => ` ${c[k] ?? "n/a"} |`).join("")}`);
   const atTarget = r.counts.filter((c) => !c.shown);
   if (atTarget.length) {
     say();
-    say(`Already 0 in both arms, unchanged: ${atTarget.map((c) => c.what.toLowerCase()).join("; ")}.`);
+    say(`Already 0 everywhere: ${atTarget.map((c) => c.what.toLowerCase()).join(", ")}.`);
   }
 
   section(SECTIONS.prompts);
-  say(`| Prompt | Words | Facts missed | Line one |${r.judge ? " Judge, old / new |" : ""}`);
-  say(`|---|---|---|---|${r.judge ? "---|" : ""}`);
+  // A result from before the prompts carried noise lists has no kept field and no column.
+  const withKept = r.prompts.some((p) => p.kept);
+  say(`| Prompt | Words | Facts missed |${withKept ? " Noise kept |" : ""}${judged ? ` Tests passed, of ${r.judge.length} |` : ""}`);
+  say(`|---|---|---|${withKept ? "---|" : ""}${judged ? "---|" : ""}`);
   for (const p of r.prompts) {
-    say(`| ${code(p.id)} | ${p.words.old ?? "failed"} -> ${p.words.new ?? "failed"}${p.words.pct == null ? "" : ` ${pct(p.words.pct)}`} | ${p.missed.old ?? "failed"} -> ${p.missed.new ?? "failed"} | ${p.lineOne.old} -> ${p.lineOne.new} |${r.judge ? ` ${p.judge ? `${p.judge.old} / ${p.judge.new}` : "failed"} |` : ""}`);
+    const words = cols.map((k) => p.words[k] ?? "failed").join(" / ");
+    // undefined is a column the row never had (an older result), null a failed reply.
+    const missedVals = cols.map((k) => (p.missed[k] === undefined ? "n/a" : p.missed[k] ?? "failed"));
+    const missed = missedVals.every((v) => v === "n/a") ? "none required" : missedVals.join(" / ");
+    const keptVals = cols.map((k) => (p.kept?.[k] === undefined ? "n/a" : p.kept[k] ?? "failed"));
+    const kept = keptVals.every((v) => v === "n/a") ? "none listed" : keptVals.join(" / ");
+    say(`| ${code(p.id)} | ${words} | ${missed} |${withKept ? ` ${kept} |` : ""}${judged ?` ${cols.map((k) => p.judge?.[k] ?? "failed").join(" / ")} |` : ""}`);
   }
+  say();
+  say(`- Each cell: ${cols.map((k) => name[k]).join(" / ")}.`);
 
   section(SECTIONS.regressions);
-  if (!r.regressions.length) say(NO_REGRESSIONS);
-  else for (const line of r.regressions) say(`- ${line}`);
+  // One line per regression, in the reader's words, then the judge's reason under it.
+  // The two rounds quote the same line or fact in slightly different words, so quotes
+  // collapse on their opening words and only the first reason is printed.
+  const distinct = (list) => {
+    const seen = new Set();
+    return list.filter((s) => {
+      const key = String(s).toLowerCase().replace(/[^a-z0-9]+/g, " ").trim().slice(0, 40);
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+  };
+  const wordRegression = (e, rival) => {
+    if (e.kind === "count") return `${e.what}: ${e.from} with ${name[rival]}, ${e.to} with ${name.new}. Target is ${e.target}.`;
+    if (e.kind === "fact") return `${code(e.prompt)}: ${name.new} dropped "${flat(e.fact)}". ${Name(rival)} states it.`;
+    if (e.kind === "noise") return `${code(e.prompt)}: ${name.new} kept "${flat(e.line)}". ${Name(rival)} cuts it.`;
+    const list = distinct(e.quotes);
+    const quotes = list.map((s) => `"${flat(s)}"`).join(", ");
+    const split = e.split ? ", by one judge of two" : "";
+    if (e.criterion === "complete") return `${code(e.prompt)}: ${name.new} dropped ${quotes}${split}. ${Name(rival)} states ${list.length > 1 ? "both" : "it"}.`;
+    if (e.criterion === "noise") return `${code(e.prompt)}: ${name.new} kept a line not worth reading${split}: ${quotes}. ${Name(rival)} has none.`;
+    return `${code(e.prompt)}: ${name.new} fails ${criterion(e.criterion)} on ${quotes}${split}. ${Name(rival)} passes.`;
+  };
+  const sayGroup = (list, rival) => {
+    say(`Against ${name[rival]}:`);
+    say();
+    if (!list.length) say("- None.");
+    for (const e of list) {
+      say(`- ${wordRegression(e, rival)}`);
+      const reason = (e.reasons ?? [])[0];
+      if (reason) say(`  - Judge: "${flat(reason)}"`);
+    }
+  };
+  if (Array.isArray(reg)) {
+    // An older result holds its regressions as lines already worded.
+    if (!reg.length) say("None.");
+    for (const line of reg) {
+      const { text, why } = typeof line === "string" ? { text: line } : line;
+      say(`- ${text}`);
+      for (const w of why ?? []) say(`  - ${criterion(w.criterion)}: ${w.reasons.map((s) => `"${flat(s)}"`).join(" / ")}`);
+    }
+  } else {
+    sayGroup(reg.old, "old");
+    if (reg.none) {
+      say();
+      sayGroup(reg.none, "none");
+    }
+  }
 
   section(SECTIONS.evidence);
   if (r.evidence.facts.length) {
-    say("Facts a reply should have stated.");
+    say("Must-have facts and who stated them.");
     say();
-    say("| Prompt | Fact | Old | New |");
-    say("|---|---|---|---|");
-    for (const f of r.evidence.facts) say(`| ${code(f.id)} | ${cell(f.fact)} | ${f.old === "missed" ? "**missed**" : f.old} | ${f.new === "missed" ? "**missed**" : f.new} |`);
+    const state = (s) => (s === "missed" ? "**missed**" : s === "kept" ? "stated" : s ?? "n/a");
+    say(`| Prompt | Fact |${cols.map((k) => ` ${Name(k)} |`).join("")}`);
+    say(`|---|---|${cols.map(() => "---|").join("")}`);
+    for (const f of r.evidence.facts) say(`| ${code(f.id)} | ${cell(f.fact)} |${cols.map((k) => ` ${state(f[k])} |`).join("")}`);
   }
-  if (r.judge) {
-    for (const arm of ["old", "new"]) {
-      const list = r.evidence.noise[arm];
+  if (r.evidence.noise?.length) {
+    if (r.evidence.facts.length) say();
+    say("Noise lines and who kept them.");
+    say();
+    const state = (s) => (s === "kept" ? "**kept**" : s ?? "n/a");
+    say(`| Prompt | Line |${cols.map((k) => ` ${Name(k)} |`).join("")}`);
+    say(`|---|---|${cols.map(() => "---|").join("")}`);
+    for (const f of r.evidence.noise) say(`| ${code(f.id)} | ${cell(f.line)} |${cols.map((k) => ` ${state(f[k])} |`).join("")}`);
+  }
+  if (judged && r.evidence.fails) {
+    for (const k of ["old", "new"]) {
+      const list = r.evidence.fails[k];
       if (!list.length) continue;
       say();
-      say(`Noise the ${arm} rules left in${list.length > EVIDENCE_CAP ? ` (${EVIDENCE_CAP} of ${list.length})` : ` (${list.length})`}.`);
+      say(`Lines the judge failed, ${name[k]}${list.length > EVIDENCE_CAP ? ` (${EVIDENCE_CAP} of ${list.length})` : ` (${list.length})`}.`);
       say();
-      say("| Prompt | Line |");
-      say("|---|---|");
-      for (const q of list.slice(0, EVIDENCE_CAP)) say(`| ${code(q.id)} | ${cell(q.line)} |`);
+      say("| Prompt | Question | Line |");
+      say("|---|---|---|");
+      for (const q of list.slice(0, EVIDENCE_CAP)) say(`| ${code(q.id)} | ${criterion(q.criterion)} | ${cell(q.line)} |`);
     }
   }
 
   section(SECTIONS.caveats);
-  say(`- ${r.sample.prompts} ${plural(r.sample.prompts, "prompt", "prompts")} at ${r.reps} ${plural(r.reps, "reply", "replies")} each. A margin of 1 is a coin flip. A margin of 2 or more in the same direction is a result.`);
-  say("- Both arms ran the same writer model, the same prompts and the same isolation. Only the rules differ.");
+  say(`- ${r.sample.prompts} ${plural(r.sample.prompts, "prompt", "prompts")}, ${r.reps === 1 ? "one reply" : `${r.reps} replies`} each: one result either way is chance, a gap across most rows is a result.`);
+  say("- Same writer model, same prompts, same empty sandbox for every reply. Only the rules differ.");
+  if (none) say("- No plugin is the bare model in that sandbox, not your own setup.");
   if (r.judge) {
     const same = r.models.judge.length === 1 && r.models.writer.length === 1 && r.models.judge[0] === r.models.writer[0];
-    say(`- ${r.models.judge.join(", ")} judged, ${r.models.writer.join(", ")} wrote. ${same ? "Same model on both sides, so a shared blind spot is not caught. Pass --judge-model to change that." : "Different models, so a shared blind spot is not scoring itself."}`);
+    say(same ? "- The judge is the writer model, so it shares the writer's blind spots. Pass --judge-model to change that." : "- The judge is a different model from the writer, so it does not share the writer's blind spots.");
   }
-  say(`- Re-run it: ${code(r.commands.rerun)}. Score these same replies again without regenerating them: ${code(withDir(r.commands.rescore))}.`);
-  say(`- Re-render this report from the saved result: ${code(withDir(r.commands.rerender))}.`);
+  say(`- Re-run: ${code(r.commands.rerun)}`);
+  say(`- Grade these same replies again: ${code(withDir(r.commands.rescore))}`);
+  say(`- Re-render from the saved result: ${code(withDir(r.commands.rerender))}`);
 
   return out.join("\n");
 }

@@ -6,7 +6,7 @@
     "mustHave": [
       { "fact": "README.md line 13 now says install", "keys": ["install"] },
       { "fact": "the same typo in CHANGELOG.md was left", "keys": ["CHANGELOG"] },
-      { "fact": "not committed", "keys": ["not committed", "uncommitted"] }
+      { "fact": "not committed", "keys": ["re:not committed|uncommitted|nothing (is )?committed|isn't committed|commit:\\*{0,2} none"] }
     ],
     "prompt": "You are Claude Code, reporting to the user after finishing a task in their repo. Write only the reply to the user.\n\nThe user asked: \"Fix the typo in the README install command, it says `claude plugin instal`.\"\n\nWhat you did and know:\n- Changed `instal` to `install` in README.md line 13.\n- The same typo is in CHANGELOG.md under the 0.1.0 entry. You left it, because the user asked about the README.\n- You ran the gate script, it passed.\n- Not committed."
   },
@@ -19,6 +19,14 @@
       { "fact": "the id field is in the JSON and was not asked for", "keys": ["id"] },
       { "fact": "not tested on Windows", "keys": ["Windows"] },
       { "fact": "tests: 212 pass, 3 new", "keys": ["212"] }
+    ],
+    "noise": [
+      { "line": "the help text and the README command table were updated", "keys": ["help text", "command table"] },
+      { "line": "the lint warning that was already there", "keys": ["format.ts", "re:pre-?existing"] },
+      { "line": "zero rows print []", "keys": ["zero rows", "no rows", "re:`\\[\\]`"] },
+      { "line": "no other command has --json", "keys": ["no other command", "convention"] },
+      { "line": "the task notes were updated", "keys": ["task notes", "re:\\b(my|own) notes"] },
+      { "line": "the user will try it on production data", "keys": ["production data"] }
     ],
     "prompt": "You are Claude Code, reporting to the user after finishing a task in their repo. Write only the reply to the user.\n\nThe user asked: \"Add a --json flag to the list command so I can pipe it into jq.\"\n\nWhat you did and know:\n- Added `--json` to `src/cli/list.ts`. With the flag, the command prints the same rows as a JSON array and skips the table.\n- The JSON includes an `id` field per row that the table view hides. You included it because jq users will filter on it. The user did not ask for it.\n- Updated the help text and the README's command table.\n- Added `test/list-json.test.ts` with 3 cases. Full suite: 212 tests pass. Lint: clean, apart from one pre-existing warning in `src/cli/format.ts` that you did not touch.\n- With zero rows the flag prints `[]`, which is what jq expects.\n- You did not test on Windows. Line endings could differ, which does not matter for JSON.\n- You checked that no other command has a `--json` flag, so there was no convention to follow.\n- Committed as 7f3e2a1 `feat(cli): add --json to list`.\n- You updated your task notes with the commit hash.\n- The user said they will try it against their production data."
   },
@@ -35,6 +43,11 @@
       { "fact": "REDIS_URL must be set in production before Friday", "keys": ["REDIS_URL"] },
       { "fact": "the load test was not run", "keys": ["load.sh", "load test"] },
       { "fact": "the rate limiter is still in-memory", "keys": ["ratelimit", "rate limiter"] }
+    ],
+    "noise": [
+      { "line": "the grep over 31 call sites", "keys": ["call sites", "re:\\b31\\b"] },
+      { "line": "the task ledger was updated", "keys": ["ledger"] },
+      { "line": "the user will review the PR tomorrow", "keys": ["tomorrow"] }
     ],
     "prompt": "You are Claude Code, reporting to the user after finishing a task in their repo. Write only the reply to the user.\n\nThe user asked: \"Migrate the auth module from callbacks to async/await and move the session store from the in-memory map to Redis. We deploy Friday.\"\n\nWhat you did and know:\n- 14 files changed under `src/auth/` and `src/session/`, plus `package.json`. Commit `a91c4e7` on branch `auth-async`. Not merged.\n- Every callback-style function in `src/auth/` is now async. You kept a thin compatibility wrapper `src/auth/legacy.ts` so the three callers in `src/jobs/` that still pass callbacks keep working. The user did not ask for the wrapper. Removing it means touching `src/jobs/`, which was out of scope.\n- Session store: `src/session/store.ts` now uses `ioredis`. You picked ioredis over node-redis because ioredis was already in `package.json` for the queue.\n- Behavior change: sessions now expire after `SESSION_TTL_SECONDS` (default 86400) because Redis enforces the TTL. The in-memory map never expired sessions. Users who stay logged in for more than a day will be logged out once after the deploy.\n- If Redis is unreachable, every login and every authenticated request fails with a 503. There is no fallback to memory. You did not add one because a silent fallback would split sessions across instances.\n- Production needs `REDIS_URL` set. Staging already has it. You did not check the production environment, you have no access to it.\n- The rate limiter in `src/middleware/ratelimit.ts` still uses its own in-memory map. It is a separate concern and you left it.\n- Tests: 2 new test files, 9 new cases. Full suite 131 pass, 1 skipped: `test/session/reconnect.test.ts` needs a live Redis and is skipped in CI by the existing `SKIP_REDIS` flag.\n- Not run: the load test in `scripts/load.sh`. It takes 40 minutes and needs the staging cluster.\n- You grepped for every caller of the old callback API (31 call sites) and confirmed each one is either migrated or goes through the legacy wrapper.\n- Type check passes. Lint passes.\n- You found and fixed an unrelated bug on the way: `src/auth/token.ts` compared the token expiry in milliseconds against a value in seconds, so tokens expired 1000 times too late. Fixed in the same commit. The user did not ask for this and may want it in its own commit.\n- You updated your task ledger with the commit hash and the decisions above.\n- The user said they will review the PR tomorrow and deploy Friday.\n- Before Friday the user has to set `REDIS_URL` in production and decide whether the token expiry fix stays in this commit."
   },
@@ -73,6 +86,10 @@
       { "fact": "the two rules the source lacks are gone", "keys": ["two rules", "gone", "removed", "dropped"] },
       { "fact": "nothing is committed", "keys": ["not committed", "nothing is committed", "nothing committed", "uncommitted"] }
     ],
+    "noise": [
+      { "line": "the 0.7.0 to 0.9.0 entries are unchanged", "keys": ["0.7.0"] },
+      { "line": "the grep was run and lists exactly those 8 releases", "keys": ["re:lists (exactly|all|those)", "re:\\bran (it|the (grep|command))"] }
+    ],
     "prompt": "You are Claude Code, reporting to the user after finishing a task in their repo. Write only the reply to the user.\n\nThe user asked: \"We have a plugin called no-smartass-bs. Copy its changelog rules into this repo's CHANGELOGS.md and update the changelog here.\"\n\nWhat you did and know:\n- Replaced the intro line and the rules block in CHANGELOGS.md with the ones from no-smartass-bs.\n- Left the 0.7.0 to 0.9.0 entries unchanged, which the user chose earlier in the conversation.\n- Kept this repo's release commit format `release: X.Y.Z` instead of the copied `chore(plugin): release X.Y.Z`, because every release here from 0.4.0 to 0.9.0 uses that form.\n- Changed the copied command for finding the previous release to `git log --grep=\"^release: [0-9]\"`. You ran it and it lists exactly those 8 releases. The copied `--grep=\"release [0-9]\"` finds only 0.8.0 in this repo, so the next changelog entry would have repeated everything from 0.8.1 on.\n- Two rules the source lacks are gone: rewrite the entry if the version being released already exists because an earlier release attempt was undone, and check before a release that plugin.json and the last release commit show the same version.\n- Nothing is committed."
   },
   {
@@ -82,6 +99,14 @@
     "mustHave": [
       { "fact": "the new commit hash 3366f99", "keys": ["3366f99"] },
       { "fact": "the output-length.mjs line was kept against the new rules and the user can delete it", "keys": ["output-length"] }
+    ],
+    "noise": [
+      { "line": "author date kept, parent unchanged", "keys": ["author date", "re:parent (commit )?(is )?(unchanged|kept|the same)"] },
+      { "line": "what the rewritten 0.9.0 entry says", "keys": ["Removed heading", "re:\\btwo lines\\b"] },
+      { "line": "the older entries are unchanged", "keys": ["re:\\b(older|other|earlier|previous) entries"] },
+      { "line": "the origin/main and plugin.json check", "keys": ["plugin.json", "re:only file"] },
+      { "line": "the task ledger was updated", "keys": ["ledger"] },
+      { "line": "the push command the user said they will run", "keys": ["force-with-lease", "re:git push"] }
     ],
     "prompt": "You are Claude Code, reporting to the user after finishing a task in their repo. Write only the reply to the user.\n\nThe user asked: \"Only update the 0.9.0 entry, and put the changelog change inside the last commit, the release commit. We will do a force push.\"\n\nWhat you did and know:\n- Amended the 0.9.0 release commit. It is now 3366f99, replacing 79bb5e8, author date kept, parent unchanged.\n- It holds the new changelog rules and the 0.9.0 entry rewritten in the new format: a Removed heading with two lines, one saying the output rules moved to their own plugin no-smartass-bs, one saying scripts/output-length.mjs is gone since it only measured those rules.\n- The older entries are unchanged.\n- The new rules say eval tooling gets no changelog line. You kept the scripts/output-length.mjs line anyway because the README used to tell users to run that script, so they can notice it is gone. The user may count it as eval tooling and want it deleted.\n- You checked that CHANGELOGS.md is the only file that differs from origin/main and that plugin.json still says 0.9.0.\n- You updated your own task ledger to point at 3366f99 instead of 79bb5e8.\n- You have not pushed. The old 79bb5e8 is on origin. The command would be `git push --force-with-lease origin main`."
   },
@@ -93,6 +118,11 @@
       { "fact": "the fallback that still reads the old key with a deprecation warning, which was not asked for", "keys": ["fallback", "deprecation"] },
       { "fact": "docs/config.md still shows the old key in a generated section", "keys": ["docs/config.md"] },
       { "fact": "commit 4c1e2ab", "keys": ["4c1e2ab"] }
+    ],
+    "noise": [
+      { "line": "the two unused imports", "keys": ["re:unused imports?"] },
+      { "line": "the task notes were updated", "keys": ["task notes", "re:\\b(my|own) notes"] },
+      { "line": "confirm with npm test", "keys": ["npm test"] }
     ],
     "prompt": "You are Claude Code, reporting to the user after finishing a task in their repo. Write only the reply to the user.\n\nThe user asked: \"Rename the config key cacheTtl to cache.ttlSeconds everywhere.\"\n\nWhat you did and know:\n- Renamed the key in src/config.ts, src/cache.ts, config/default.yaml, config/production.yaml, test/cache.test.ts and README.md.\n- Added a fallback in src/config.ts that still reads cacheTtl and logs a deprecation warning once. The user did not ask for it.\n- docs/config.md still shows cacheTtl in one example. You did not change it because that section is marked as generated from a schema you could not find.\n- The test suite passed, 48 tests, and the linter passed.\n- You noticed two unused imports in src/cache.ts and left them alone.\n- Committed as 4c1e2ab `refactor(config): rename cacheTtl to cache.ttlSeconds`.\n- You updated your own task notes with the commit hash.\n- The user can confirm with `npm test`."
   },
